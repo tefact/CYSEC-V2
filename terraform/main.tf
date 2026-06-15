@@ -12,6 +12,13 @@ provider "proxmox" {
   endpoint  = var.proxmox_endpoint
   api_token = var.proxmox_api_token
   insecure  = true
+
+  # SSH dibutuhkan untuk upload file (snippet/hook script) ke Proxmox node.
+  ssh {
+    agent    = false
+    username = "root"
+    private_key = var.ssh_private_key
+  }
 }
 
 # ==========================================
