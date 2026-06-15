@@ -24,8 +24,10 @@ resource "proxmox_virtual_environment_file" "alpine_ssh_hook" {
   datastore_id = "local"
   node_name    = "node1"
 
+  file_mode = "0700"
+
   source_raw {
-    data = <<-HOOK
+    data      = <<-HOOK
       #!/bin/sh
       VMID=$1
       PHASE=$2
@@ -101,7 +103,7 @@ resource "proxmox_virtual_environment_container" "web1" {
   }
 
   # ── Hook Script: nyalakan SSH otomatis saat CT start ──
-  hook_script = proxmox_virtual_environment_file.alpine_ssh_hook.id
+  hook_script_file_id = proxmox_virtual_environment_file.alpine_ssh_hook.id
 
   # ── Cloudflare Tunnel Auto-Install (Distributed Replica) ──
   provisioner "remote-exec" {
@@ -178,7 +180,7 @@ resource "proxmox_virtual_environment_container" "web2" {
   }
 
   # ── Hook Script: nyalakan SSH otomatis saat CT start ──
-  hook_script = proxmox_virtual_environment_file.alpine_ssh_hook.id
+  hook_script_file_id = proxmox_virtual_environment_file.alpine_ssh_hook.id
 
   # ── Cloudflare Tunnel Auto-Install (Distributed Replica) ──
   provisioner "remote-exec" {
