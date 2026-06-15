@@ -123,7 +123,7 @@ Install semua dependensi:
 apt update && apt upgrade -y
 
 # Install dependensi yang dibutuhkan runner + workflow
-apt install -y sudo curl tar git rsync openssh-client sudo
+apt install -y sudo curl tar git rsync openssh-client unzip nodejs
 ```
 
 Buat user khusus (JANGAN jalankan runner sebagai root!):
@@ -354,12 +354,21 @@ Cukup pastikan file `terraform/variables.tf` sudah sesuai spesifikasi keinginanm
 
 ```
 terraform/
-├── main.tf                      ← Provider + resource CT web1 & web2
+├── main.tf                      ← Provider + hook script + resource CT web1 & web2
 ├── variables.tf                 ← Spesifikasi (CPU, RAM, disk, IP, template)
 ├── outputs.tf                   ← Output IP & hostname setelah apply
+├── alpine-ssh-hook.sh           ← Hook script: nyalakan SSH otomatis di Alpine CT
 ├── download-template.tf.example ← (Opsional) Rename ke .tf jika mau auto-download template
 └── .gitignore                   ← Exclude .terraform/, *.tfstate
 ```
+
+> **🔧 Alpine SSH Hook Script**
+> Alpine Linux di Proxmox **tidak menyalakan SSH secara default**. File `alpine-ssh-hook.sh` di-upload otomatis oleh Terraform sebagai snippet, lalu dipasang sebagai `hook_script` di setiap CT. Setiap kali CT Alpine start, hook ini otomatis:
+> - Mengaktifkan `PermitRootLogin prohibit-password` di sshd_config
+> - Mengaktifkan `PubkeyAuthentication`
+> - Start service `sshd`
+>
+> Hasilnya? Terraform `remote-exec` bisa langsung masuk via SSH tanpa setup manual!
 
 #### ⚙️ Kustomisasi Spesifikasi CT:
 

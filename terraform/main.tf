@@ -15,6 +15,39 @@ provider "proxmox" {
 }
 
 # ==========================================
+# 📄 Hook Script — Alpine SSH Bootstrap
+# ==========================================
+# Upload snippet ke Proxmox storage supaya bisa dipakai sebagai hook_script.
+# Hook ini jalan otomatis tiap CT start: nyalakan sshd di Alpine.
+resource "proxmox_virtual_environment_file" "alpine_ssh_hook" {
+  content_type = "snippets"
+  datastore_id = "local"
+  node_name    = "node1"
+
+  source_raw {
+    data = <<-HOOK
+      #!/bin/sh
+      VMID=$1
+      PHASE=$2
+      case "$PHASE" in
+        post-start)
+          pct exec "$VMID" -- sh -c '
+            if [ -f /etc/alpine-release ]; then
+              if [ -f /etc/ssh/sshd_config ]; then
+                sed -i "s/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/" /etc/ssh/sshd_config
+                sed -i "s/^#*PubkeyAuthentication.*/PubkeyAuthentication yes/" /etc/ssh/sshd_config
+              fi
+              rc-service sshd start
+            fi
+          ' 2>/dev/null
+          ;;
+      esac
+    HOOK
+    file_name = "alpine-ssh-hook.sh"
+  }
+}
+
+# ==========================================
 # 🌐 LXC 1 — CT web1 (Node: node1)
 # ==========================================
 resource "proxmox_virtual_environment_container" "web1" {
@@ -67,6 +100,9 @@ resource "proxmox_virtual_environment_container" "web1" {
     nesting = true
   }
 
+  # ── Hook Script: nyalakan SSH otomatis saat CT start ──
+  hook_script = proxmox_virtual_environment_file.alpine_ssh_hook.id
+
   # ── Cloudflare Tunnel Auto-Install (Distributed Replica) ──
   provisioner "remote-exec" {
     inline = [
@@ -84,6 +120,7 @@ resource "proxmox_virtual_environment_container" "web1" {
     user        = "root"
     private_key = var.ssh_private_key
     host        = "10.10.10.111"
+    timeout     = "2m"
   }
 }
 
@@ -140,6 +177,9 @@ resource "proxmox_virtual_environment_container" "web2" {
     nesting = true
   }
 
+  # ── Hook Script: nyalakan SSH otomatis saat CT start ──
+  hook_script = proxmox_virtual_environment_file.alpine_ssh_hook.id
+
   # ── Cloudflare Tunnel Auto-Install (Distributed Replica) ──
   provisioner "remote-exec" {
     inline = [
@@ -157,5 +197,6 @@ resource "proxmox_virtual_environment_container" "web2" {
     user        = "root"
     private_key = var.ssh_private_key
     host        = "10.10.10.112"
+    timeout     = "2m"
   }
 }
