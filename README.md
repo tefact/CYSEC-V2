@@ -346,7 +346,8 @@ Cukup pastikan file `terraform/variables.tf` sudah sesuai spesifikasi keinginanm
 3. ✅ Menanam `DEPLOY_PUBLIC_KEY` secara otomatis ke kedua CT
 4. ✅ Set CPU, RAM, disk sesuai `variables.tf`
 5. ✅ Start kedua CT
-6. ✅ **Install `cloudflared` + inject tunnel token → True HA otomatis!**
+6. ✅ **SSH ke Proxmox host → `pct exec` untuk enable SSH + install Cloudflared di dalam CT**
+7. ✅ **Inject tunnel token → True HA otomatis!**
 
 **Kamu langsung skip ke Step 5. Tidak ada kerja manual!** 🎉
 
@@ -354,21 +355,23 @@ Cukup pastikan file `terraform/variables.tf` sudah sesuai spesifikasi keinginanm
 
 ```
 terraform/
-├── main.tf                      ← Provider + hook script + resource CT web1 & web2
-├── variables.tf                 ← Spesifikasi (CPU, RAM, disk, IP, template)
+├── main.tf                      ← Provider + resource CT web1 & web2 (pct exec provisioning)
+├── variables.tf                 ← Spesifikasi (CPU, RAM, disk, IP, node host, template)
 ├── outputs.tf                   ← Output IP & hostname setelah apply
-├── alpine-ssh-hook.sh           ← Hook script: nyalakan SSH otomatis di Alpine CT
 ├── download-template.tf.example ← (Opsional) Rename ke .tf jika mau auto-download template
 └── .gitignore                   ← Exclude .terraform/, *.tfstate
 ```
 
-> **🔧 Alpine SSH Hook Script**
-> Alpine Linux di Proxmox **tidak menyalakan SSH secara default**. File `alpine-ssh-hook.sh` di-upload otomatis oleh Terraform sebagai snippet, lalu dipasang sebagai `hook_script` di setiap CT. Setiap kali CT Alpine start, hook ini otomatis:
-> - Mengaktifkan `PermitRootLogin prohibit-password` di sshd_config
-> - Mengaktifkan `PubkeyAuthentication`
-> - Start service `sshd`
+> **🔧 Host-Based Provisioning (pct exec)**
+> Alpine Linux di Proxmox **tidak menyalakan SSH secara default**. Daripada pakai hook script (yang butuh `root@pam` dan snippets), kita pakai strategi yang lebih elegan:
 >
-> Hasilnya? Terraform `remote-exec` bisa langsung masuk via SSH tanpa setup manual!
+> 1. Terraform SSH ke **Proxmox host** (10.10.10.201 / .202)
+> 2. Dari host, jalankan `pct exec <VMID>` untuk:
+>    - Enable SSH di dalam Alpine (`PermitRootLogin`, `PubkeyAuthentication`, start sshd)
+>    - Install Cloudflare Tunnel
+> 3. CT sekarang siap menerima rsync di Tahap 2!
+>
+> **Keuntungan:** Bypass 403 hookscript, bypass “no route to host”, dan tidak perlu snippets storage!
 
 #### ⚙️ Kustomisasi Spesifikasi CT:
 
@@ -389,6 +392,15 @@ variable "ct_disk_size" {
 
 variable "ct_os_template" {
   default = "local:vztmpl/alpine_3.23_amd64_default.tar.xz"
+}
+
+# IP management Proxmox node (untuk SSH + pct exec)
+variable "proxmox_node1_host" {
+  default = "10.10.10.201"  # Sesuaikan dengan IP node1 kamu
+}
+
+variable "proxmox_node2_host" {
+  default = "10.10.10.202"  # Sesuaikan dengan IP node2 kamu
 }
 ```
 

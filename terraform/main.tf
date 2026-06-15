@@ -12,59 +12,6 @@ provider "proxmox" {
   endpoint  = var.proxmox_endpoint
   api_token = var.proxmox_api_token
   insecure  = true
-
-  # SSH dibutuhkan untuk upload file (snippet/hook script) ke Proxmox node.
-  ssh {
-    agent    = false
-    username = "root"
-    private_key = var.ssh_private_key
-  }
-}
-
-# ==========================================
-# 📄 Hook Script — Alpine SSH Bootstrap
-# ==========================================
-# Upload snippet ke Proxmox storage supaya bisa dipakai sebagai hook_script.
-# Hook ini jalan otomatis tiap CT start: nyalakan sshd di Alpine.
-resource "proxmox_virtual_environment_file" "alpine_ssh_hook" {
-  content_type = "snippets"
-  datastore_id = "local"
-  node_name    = "node1"
-
-  file_mode = "0700"
-
-  source_raw {
-    data      = <<-HOOK
-      #!/bin/sh
-      VMID=$1
-      PHASE=$2
-      case "$PHASE" in
-        post-start)
-          # Tunggu CT benar-benar siap (Alpine init butuh beberapa detik)
-          for i in 1 2 3 4 5 6 7 8 9 10; do
-            pct exec "$VMID" -- test -f /etc/alpine-release 2>/dev/null && break
-            sleep 2
-          done
-          # Enable & start SSH di Alpine
-          pct exec "$VMID" -- sh -c '
-            if [ -f /etc/alpine-release ]; then
-              if [ -f /etc/ssh/sshd_config ]; then
-                sed -i "s/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/" /etc/ssh/sshd_config
-                sed -i "s/^#*PubkeyAuthentication.*/PubkeyAuthentication yes/" /etc/ssh/sshd_config
-              fi
-              rc-service sshd start
-              # Tunggu sshd benar-benar listen
-              for i in 1 2 3 4 5; do
-                nc -z localhost 22 2>/dev/null && break
-                sleep 1
-              done
-            fi
-          '
-          ;;
-      esac
-    HOOK
-    file_name = "alpine-ssh-hook.sh"
-  }
 }
 
 # ==========================================
@@ -120,27 +67,37 @@ resource "proxmox_virtual_environment_container" "web1" {
     nesting = true
   }
 
-  # ── Hook Script: nyalakan SSH otomatis saat CT start ──
-  hook_script_file_id = proxmox_virtual_environment_file.alpine_ssh_hook.id
-
-  # ── Cloudflare Tunnel Auto-Install (Distributed Replica) ──
+  # ── Host-Based Provisioning: SSH ke Proxmox host → pct exec ke dalam CT ──
+  # Bypass 403 hookscript & "no route to host" — proven reliable!
   provisioner "remote-exec" {
     inline = [
-      "apk update && apk add curl openrc libc6-compat",
-      "curl -L --output /usr/local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64",
-      "chmod +x /usr/local/bin/cloudflared",
-      "cloudflared service install ${var.cf_tunnel_token}",
-      "rc-update add cloudflared default",
-      "rc-service cloudflared start"
+      # 1. Tunggu CT benar-benar running
+      "until pct status 111 | grep -q 'running'; do sleep 2; done",
+      "sleep 5",
+
+      # 2. Enable SSH di dalam Alpine CT (via pct exec dari host)
+      "pct exec 111 -- sh -c 'sed -i \"s/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/\" /etc/ssh/sshd_config'",
+      "pct exec 111 -- sh -c 'sed -i \"s/^#*PubkeyAuthentication.*/PubkeyAuthentication yes/\" /etc/ssh/sshd_config'",
+      "pct exec 111 -- sh -c 'rc-update add sshd default && rc-service sshd start'",
+      "sleep 3",
+
+      # 3. Install Cloudflare Tunnel (Distributed Replica)
+      "pct exec 111 -- apk update",
+      "pct exec 111 -- apk add curl openrc libc6-compat",
+      "pct exec 111 -- curl -L --output /usr/local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64",
+      "pct exec 111 -- chmod +x /usr/local/bin/cloudflared",
+      "pct exec 111 -- cloudflared service install ${var.cf_tunnel_token}",
+      "pct exec 111 -- sh -c 'rc-update add cloudflared default && rc-service cloudflared start'"
     ]
   }
 
+  # SSH ke Proxmox host, BUKAN ke CT langsung
   connection {
     type        = "ssh"
     user        = "root"
     private_key = var.ssh_private_key
-    host        = "10.10.10.111"
-    timeout     = "2m"
+    host        = var.proxmox_node1_host
+    timeout     = "5m"
   }
 }
 
@@ -197,26 +154,35 @@ resource "proxmox_virtual_environment_container" "web2" {
     nesting = true
   }
 
-  # ── Hook Script: nyalakan SSH otomatis saat CT start ──
-  hook_script_file_id = proxmox_virtual_environment_file.alpine_ssh_hook.id
-
-  # ── Cloudflare Tunnel Auto-Install (Distributed Replica) ──
+  # ── Host-Based Provisioning: SSH ke Proxmox host → pct exec ke dalam CT ──
   provisioner "remote-exec" {
     inline = [
-      "apk update && apk add curl openrc libc6-compat",
-      "curl -L --output /usr/local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64",
-      "chmod +x /usr/local/bin/cloudflared",
-      "cloudflared service install ${var.cf_tunnel_token}",
-      "rc-update add cloudflared default",
-      "rc-service cloudflared start"
+      # 1. Tunggu CT benar-benar running
+      "until pct status 112 | grep -q 'running'; do sleep 2; done",
+      "sleep 5",
+
+      # 2. Enable SSH di dalam Alpine CT (via pct exec dari host)
+      "pct exec 112 -- sh -c 'sed -i \"s/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/\" /etc/ssh/sshd_config'",
+      "pct exec 112 -- sh -c 'sed -i \"s/^#*PubkeyAuthentication.*/PubkeyAuthentication yes/\" /etc/ssh/sshd_config'",
+      "pct exec 112 -- sh -c 'rc-update add sshd default && rc-service sshd start'",
+      "sleep 3",
+
+      # 3. Install Cloudflare Tunnel (Distributed Replica)
+      "pct exec 112 -- apk update",
+      "pct exec 112 -- apk add curl openrc libc6-compat",
+      "pct exec 112 -- curl -L --output /usr/local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64",
+      "pct exec 112 -- chmod +x /usr/local/bin/cloudflared",
+      "pct exec 112 -- cloudflared service install ${var.cf_tunnel_token}",
+      "pct exec 112 -- sh -c 'rc-update add cloudflared default && rc-service cloudflared start'"
     ]
   }
 
+  # SSH ke Proxmox host node2, BUKAN ke CT langsung
   connection {
     type        = "ssh"
     user        = "root"
     private_key = var.ssh_private_key
-    host        = "10.10.10.112"
-    timeout     = "2m"
+    host        = var.proxmox_node2_host
+    timeout     = "5m"
   }
 }

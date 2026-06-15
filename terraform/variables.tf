@@ -14,6 +14,19 @@ variable "proxmox_api_token" {
   sensitive   = true
 }
 
+# ── IP Management Proxmox Node (untuk SSH pct exec) ──────────────────
+variable "proxmox_node1_host" {
+  description = "IP SSH management node1 (tempat CT web1 berada)"
+  type        = string
+  default     = "10.10.10.201"
+}
+
+variable "proxmox_node2_host" {
+  description = "IP SSH management node2 (tempat CT web2 berada)"
+  type        = string
+  default     = "10.10.10.202"
+}
+
 variable "ssh_public_key" {
   description = "SSH Public Key untuk ditanam otomatis di CT (isi dari file .pub)"
   type        = string
@@ -47,7 +60,7 @@ variable "cf_tunnel_token" {
 }
 
 variable "ssh_private_key" {
-  description = "SSH Private Key untuk provisioner remote-exec (isi dari file private key)"
+  description = "SSH Private Key untuk provisioner remote-exec ke Proxmox host & rsync ke CT"
   type        = string
   sensitive   = true
 }
