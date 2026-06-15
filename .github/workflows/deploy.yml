@@ -1,0 +1,207 @@
+# =============================================================================
+# 🚀 GitHub Actions — Deploy Static Website ke Proxmox LXC (Active-Active)
+# =============================================================================
+# Arsitektur 2-Tahap:
+#   Tahap 1 (provision): Terraform provisioning LXC container di Proxmox
+#   Tahap 2 (deploy):    rsync file website ke kedua CT secara paralel
+#
+#   Cloudflare (50:50) ──► CT web1 "node1"  (10.10.10.111)
+#                       └─► CT web2 "node2"  (10.10.10.112)
+#
+# Kedua container jalan sebagai edge load balancer Active-Active.
+# Self-hosted runner ada di dalam environment Proxmox, jadi langsung
+# bisa akses IP private tanpa routing tambahan.
+#
+# Secrets yang harus di-set di GitHub repo Settings > Secrets:
+#   - DEPLOY_USER      → SSH username (default: root atau deploy user)
+#   - DEPLOY_KEY       → SSH private key untuk rsync
+#   - PVE_API_TOKEN    → API Token Proxmox (format: user@realm!tokenid=secret)
+#   - DEPLOY_PUBLIC_KEY → SSH public key untuk ditanam di CT via Terraform
+# =============================================================================
+
+name: 🌐 Deploy to Proxmox LXC
+
+# ── Hanya jalan kalau ada push ke branch main ──────────────────────────────
+on:
+  push:
+    branches:
+      - main
+
+# ── Concurrency: cancel deploy lama kalau ada push baru ────────────────────
+# Ini mencegah overlap rsync yang bisa bikin state web nggak konsisten
+concurrency:
+  group: deploy-proxmox
+  cancel-in-progress: true
+
+# ── Runner: self-hosted (ada di dalam Proxmox network) ─────────────────────
+jobs:
+  # =========================================================================
+  # 🏗️ TAHAP 1: Provisioning — Terraform bikin LXC container otomatis
+  # =========================================================================
+  # Job ini jalan duluan. Terraform bakal:
+  #   1. Download template Debian 13 dari internet
+  #   2. Buat CT web1 di node node1 (VMID 112)
+  #   3. Buat CT web2 di node node2 (VMID 111)
+  #   4. Tanam SSH public key ke kedua CT
+  #
+  # Kalau container udah ada, Terraform skip (idempoten).
+  # =========================================================================
+  provision:
+    runs-on: self-hosted
+
+    steps:
+      # ── Step 1: Checkout kode dari repo ─────────────────────────────────
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      # ── Step 2: Setup Terraform CLI ─────────────────────────────────────
+      - name: 🏗️ Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      # ── Step 3: Terraform Init ──────────────────────────────────────────
+      - name: 📦 Terraform Init
+        working-directory: terraform
+        run: terraform init
+
+      # ── Step 4: Terraform Apply ─────────────────────────────────────────
+      # -auto-approve supaya nggak nunggu input manual.
+      # Variabel sensitif diisi dari GitHub Secrets (TF_VAR_*).
+      - name: 🚀 Terraform Apply
+        working-directory: terraform
+        env:
+          TF_VAR_proxmox_api_token: ${{ secrets.PVE_API_TOKEN }}
+          TF_VAR_ssh_public_key: ${{ secrets.DEPLOY_PUBLIC_KEY }}
+          TF_VAR_cf_tunnel_token: ${{ secrets.CF_TUNNEL_TOKEN }}
+          TF_VAR_ssh_private_key: ${{ secrets.DEPLOY_KEY }}
+        run: terraform apply -auto-approve
+
+  # =========================================================================
+  # 🚀 TAHAP 2: Deploy — rsync file website ke kedua CT
+  # =========================================================================
+  # Job ini cuma jalan kalau Tahap 1 (provision) sukses.
+  # File website di-rsync ke /var/www/html/ di web1 dan web2 secara paralel.
+  # =========================================================================
+  deploy:
+    needs: [provision]
+    runs-on: self-hosted
+
+    steps:
+      # ── Step 1: Checkout kode dari repo ─────────────────────────────────
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      # ── Step 2: Setup SSH key dari GitHub Secrets ───────────────────────
+      # Key ditulis ke file sementara, permission 600 supaya SSH accept.
+      # Setelah selesai, file dihapus biar bersih.
+      - name: 🔑 Setup SSH key for rsync
+        run: |
+          echo "${{ secrets.DEPLOY_KEY }}" > /tmp/deploy_ssh_key
+          chmod 600 /tmp/deploy_ssh_key
+
+          # Tambahkan fingerprint kedua host ke known_hosts
+          # supaya rsync nggak nanya prompt "Are you sure?"
+          mkdir -p ~/.ssh
+          ssh-keyscan -H 10.10.10.111 >> ~/.ssh/known_hosts 2>/dev/null
+          ssh-keyscan -H 10.10.10.112 >> ~/.ssh/known_hosts 2>/dev/null
+
+      # ── Step 3: Deploy ke KEDUA container secara PARALEL ─────────────────
+      # Kita spawn 2 rsync di background (&) lalu wait — jadi deploy
+      # ke web1 dan web2 berjalan bareng, hemat waktu ~50%.
+      - name: 🚀 Rsync to CT web1 & CT web2 (parallel)
+        env:
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          echo "========================================="
+          echo "🔄 Mulai deploy paralel ke kedua CT..."
+          echo "   → CT web1: 10.10.10.111"
+          echo "   → CT web2: 10.10.10.112"
+          echo "========================================="
+
+          # ── Rsync ke CT web1 (background) ──
+          rsync -avz --delete \
+            --exclude '.git*' \
+            --exclude '.github*' \
+            -e "ssh -i /tmp/deploy_ssh_key -o StrictHostKeyChecking=no" \
+            ./ "${DEPLOY_USER}@10.10.10.111:/var/www/html/" \
+            > /tmp/rsync_web1.log 2>&1 &
+          PID_web1=$!
+
+          # ── Rsync ke CT web2 (background) ──
+          rsync -avz --delete \
+            --exclude '.git*' \
+            --exclude '.github*' \
+            -e "ssh -i /tmp/deploy_ssh_key -o StrictHostKeyChecking=no" \
+            ./ "${DEPLOY_USER}@10.10.10.112:/var/www/html/" \
+            > /tmp/rsync_web2.log 2>&1 &
+          PID_web2=$!
+
+          # ── Tunggu keduanya selesai ──
+          echo "⏳ Menunggu rsync selesai..."
+          wait $PID_web1
+          EXIT_web1=$?
+          wait $PID_web2
+          EXIT_web2=$?
+
+          # ── Tampilkan log ──
+          echo ""
+          echo "=== 📋 Log rsync CT web1 (10.10.10.111) ==="
+          cat /tmp/rsync_web1.log
+          echo ""
+          echo "=== 📋 Log rsync CT web2 (10.10.10.112) ==="
+          cat /tmp/rsync_web2.log
+          echo ""
+
+          # ── Cek hasil ──
+          if [ $EXIT_web1 -ne 0 ]; then
+            echo "❌ GAGAL deploy ke CT web1 (exit code: $EXIT_web1)"
+            FAILED=1
+          else
+            echo "✅ Sukses deploy ke CT web1"
+          fi
+
+          if [ $EXIT_web2 -ne 0 ]; then
+            echo "❌ GAGAL deploy ke CT web2 (exit code: $EXIT_web2)"
+            FAILED=1
+          else
+            echo "✅ Sukses deploy ke CT web2"
+          fi
+
+          # Bersihkan log sementara
+          rm -f /tmp/rsync_web1.log /tmp/rsync_web2.log
+
+          if [ "${FAILED:-0}" = "1" ]; then
+            echo "🛑 Salah satu deploy gagal, abort!"
+            exit 1
+          fi
+
+          echo "🎉 Kedua deploy sukses!"
+
+      # ── Step 4: Set permission yang benar di kedua CT ───────────────────
+      # www-data harus punya akses baca ke web root supaya nginx/apache
+      # bisa serve file-nya. Kita jalankan chown + chmod via SSH.
+      - name: 🔒 Fix file permissions on both CTs
+        env:
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          echo "🔧 Set permission /var/www/html/ di kedua CT..."
+
+          for IP in 10.10.10.111 10.10.10.112; do
+            echo "  → $IP ..."
+            ssh -i /tmp/deploy_ssh_key -o StrictHostKeyChecking=no \
+              "${DEPLOY_USER}@${IP}" "\
+              chown -R www-data:www-data /var/www/html/ && \
+              find /var/www/html/ -type d -exec chmod 755 {} \; && \
+              find /var/www/html/ -type f -exec chmod 644 {} \; && \
+              echo '  ✅ Permission OK'\
+              "
+          done
+
+          echo "🔒 Semua permission sudah benar!"
+
+      # ── Step 5: Cleanup SSH key ─────────────────────────────────────────
+      # Hapus key sementara biar nggak bocor ke step lain atau runner lain.
+      - name: 🧹 Cleanup SSH key
+        if: always()
+        run: |
+          rm -f /tmp/deploy_ssh_key
+          echo "🧹 SSH key sudah dihapus."

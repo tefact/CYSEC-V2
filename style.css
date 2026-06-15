@@ -1773,7 +1773,7 @@ section:not(#hero) {
 }
 
 .proj-card:nth-child(3) .proj-card-inner {
-  background: linear-gradient(135deg, #10101a, #1a1a24);
+  background: linear-gradient(135deg, #11201a, #1a1a24);
 }
 
 .proj-card:nth-child(4) .proj-card-inner {
