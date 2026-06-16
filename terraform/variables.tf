@@ -43,13 +43,13 @@ variable "ct_cpu_cores" {
 variable "ct_memory" {
   description = "RAM dedicated untuk setiap CT (dalam MB)"
   type        = number
-  default     = 256
+  default     = 128
 }
 
 variable "ct_disk_size" {
   description = "Ukuran disk untuk setiap CT (dalam GB)"
   type        = number
-  default     = 2
+  default     = 1
 }
 
 # ── Cloudflare Tunnel ───────────────────────────────────────────────

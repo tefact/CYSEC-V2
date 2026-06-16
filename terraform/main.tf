@@ -133,8 +133,8 @@ resource "proxmox_virtual_environment_container" "web1" {
       # 3. Inisialisasi OpenRC (fix 'softlevel not set')
       "/usr/bin/lxc-attach -n 111 -- sh -c 'mkdir -p /run/openrc && touch /run/openrc/softlevel'",
 
-      # 4. Install paket dasar (openssh DULUAN supaya sshd_config ada — apk update sudah berhasil di step 2)
-      "/usr/bin/lxc-attach -n 111 -- apk add --no-cache openssh curl libc6-compat rsync openrc",
+      # 4. Install semua paket sekaligus (satu kali download index apk — hemat ~20s)
+      "/usr/bin/lxc-attach -n 111 -- apk add --no-cache openssh curl libc6-compat rsync openrc nginx",
 
       # 5. Konfigurasi & start SSH
       "/usr/bin/lxc-attach -n 111 -- sh -c 'sed -i \"s/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/\" /etc/ssh/sshd_config'",
@@ -145,8 +145,7 @@ resource "proxmox_virtual_environment_container" "web1" {
       # 5.5. Buat web root directory + chmod 777 (rsync user perlu tulis)
       "/usr/bin/lxc-attach -n 111 -- sh -c 'mkdir -p /var/www/html && chmod -R 777 /var/www/html'",
 
-      # 5.6. Install + konfigurasi nginx (serve /var/www/html di port 80)
-      "/usr/bin/lxc-attach -n 111 -- apk add --no-cache nginx",
+      # 5.6. Konfigurasi nginx (serve /var/www/html di port 80) — nginx sudah terinstall di step 4
       "echo 'server {' > /tmp/nginx_111",
       "echo '    listen 80 default_server;' >> /tmp/nginx_111",
       "echo '    listen [::]:80 default_server;' >> /tmp/nginx_111",
@@ -317,8 +316,8 @@ resource "proxmox_virtual_environment_container" "web2" {
       # 3. Inisialisasi OpenRC (fix 'softlevel not set')
       "/usr/bin/lxc-attach -n 112 -- sh -c 'mkdir -p /run/openrc && touch /run/openrc/softlevel'",
 
-      # 4. Install paket dasar (openssh DULUAN supaya sshd_config ada — apk update sudah berhasil di step 2)
-      "/usr/bin/lxc-attach -n 112 -- apk add --no-cache openssh curl libc6-compat rsync openrc",
+      # 4. Install semua paket sekaligus (satu kali download index apk — hemat ~20s)
+      "/usr/bin/lxc-attach -n 112 -- apk add --no-cache openssh curl libc6-compat rsync openrc nginx",
 
       # 5. Konfigurasi & start SSH
       "/usr/bin/lxc-attach -n 112 -- sh -c 'sed -i \"s/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/\" /etc/ssh/sshd_config'",
@@ -329,8 +328,7 @@ resource "proxmox_virtual_environment_container" "web2" {
       # 5.5. Buat web root directory + chmod 777 (rsync user perlu tulis)
       "/usr/bin/lxc-attach -n 112 -- sh -c 'mkdir -p /var/www/html && chmod -R 777 /var/www/html'",
 
-      # 5.6. Install + konfigurasi nginx (serve /var/www/html di port 80)
-      "/usr/bin/lxc-attach -n 112 -- apk add --no-cache nginx",
+      # 5.6. Konfigurasi nginx (serve /var/www/html di port 80) — nginx sudah terinstall di step 4
       "echo 'server {' > /tmp/nginx_112",
       "echo '    listen 80 default_server;' >> /tmp/nginx_112",
       "echo '    listen [::]:80 default_server;' >> /tmp/nginx_112",

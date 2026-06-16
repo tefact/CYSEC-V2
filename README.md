@@ -155,9 +155,9 @@ Minimal yang harus sudah ada sebelum memulai:
 | CT ID | 100 |
 | Hostname | `github-runner` |
 | Template | **Debian 13** atau **Ubuntu 24.04** |
-| CPU | 1-2 cores |
-| RAM | 1024 MB (cukup!) |
-| Disk | 10 GB |
+| CPU | 1 cores |
+| RAM | 256 MB |
+| Disk | 3 GB |
 | Network | Bridge `vmbr0`, IP: `10.10.10.110/24`, GW: `10.10.10.1` |
 
 > ⚠️ **JANGAN pakai Alpine Linux untuk runner!** GitHub Actions Runner butuh **glibc**. Alpine pakai **musl libc** yang tidak kompatibel — binary runner akan crash saat startup.
@@ -456,11 +456,11 @@ variable "ct_cpu_cores" {
 }
 
 variable "ct_memory" {
-  default = 256   # Dalam MB
+  default = 128   # Dalam MB
 }
 
 variable "ct_disk_size" {
-  default = 2     # Dalam GB
+  default = 1     # Dalam GB
 }
 
 variable "ct_os_template" {
