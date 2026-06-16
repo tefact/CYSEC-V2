@@ -101,16 +101,15 @@ resource "proxmox_virtual_environment_container" "web1" {
       "sh -c 'echo \"--- ping gateway ---\" >> /tmp/provision_diag_111.log'",
       "/usr/bin/lxc-attach -n 111 -- ping -c 2 10.10.10.1 >> /tmp/provision_diag_111.log 2>&1 || true",
 
-      # 2. Tunggu gateway reachable (bounded: 30 x 2s = 60s, tanpa -W agar BusyBox-safe)
-      "echo '⏳ Memeriksa koneksi gateway CT 111 (maks 60s)...'",
-      "CONNECTED=0; for i in $(seq 1 30); do if /usr/bin/lxc-attach -n 111 -- ping -c 1 10.10.10.1 >/dev/null 2>&1; then CONNECTED=1; break; fi; echo '  attempt '$$i'/30...'; sleep 2; done",
-      "[ $CONNECTED -eq 1 ] && echo '✅ Gateway reachable!' || { echo '❌ CT 111 gateway tidak reachable! Check /tmp/provision_diag_111.log on host.'; exit 99; }",
+      # 2. Tunggu koneksi internet via TCP (ICMP ping tidak reliable — router bisa drop ICMP)
+      "echo '⏳ Verifying internet connectivity via apk update (TCP, maks 60s)...'",
+      "NET_OK=0; for i in $(seq 1 15); do echo \"  attempt $$i/15...\"; if sh -c '/usr/bin/lxc-attach -n 111 -- apk update >/dev/null 2>&1'; then NET_OK=1; break; fi; sleep 4; done",
+      "[ $$NET_OK -eq 1 ] && echo '✅ Internet connected (TCP verified)!' || { echo '❌ CT 111 no internet! Check /tmp/provision_diag_111.log on host.'; exit 99; }",
 
       # 3. Inisialisasi OpenRC (fix 'softlevel not set')
       "/usr/bin/lxc-attach -n 111 -- sh -c 'mkdir -p /run/openrc && touch /run/openrc/softlevel'",
 
-      # 4. Install paket dasar (openssh DULUAN supaya sshd_config ada)
-      "/usr/bin/lxc-attach -n 111 -- apk update || true",
+      # 4. Install paket dasar (openssh DULUAN supaya sshd_config ada — apk update sudah berhasil di step 2)
       "/usr/bin/lxc-attach -n 111 -- apk add --no-cache openssh curl libc6-compat rsync openrc",
 
       # 5. Konfigurasi & start SSH
@@ -242,16 +241,15 @@ resource "proxmox_virtual_environment_container" "web2" {
       "sh -c 'echo \"--- ping gateway ---\" >> /tmp/provision_diag_112.log'",
       "/usr/bin/lxc-attach -n 112 -- ping -c 2 10.10.10.1 >> /tmp/provision_diag_112.log 2>&1 || true",
 
-      # 2. Tunggu gateway reachable (bounded: 30 x 2s = 60s, tanpa -W agar BusyBox-safe)
-      "echo '⏳ Memeriksa koneksi gateway CT 112 (maks 60s)...'",
-      "CONNECTED=0; for i in $(seq 1 30); do if /usr/bin/lxc-attach -n 112 -- ping -c 1 10.10.10.1 >/dev/null 2>&1; then CONNECTED=1; break; fi; echo '  attempt '$$i'/30...'; sleep 2; done",
-      "[ $CONNECTED -eq 1 ] && echo '✅ Gateway reachable!' || { echo '❌ CT 112 gateway tidak reachable! Check /tmp/provision_diag_112.log on host.'; exit 99; }",
+      # 2. Tunggu koneksi internet via TCP (ICMP ping tidak reliable — router bisa drop ICMP)
+      "echo '⏳ Verifying internet connectivity via apk update (TCP, maks 60s)...'",
+      "NET_OK=0; for i in $(seq 1 15); do echo \"  attempt $$i/15...\"; if sh -c '/usr/bin/lxc-attach -n 112 -- apk update >/dev/null 2>&1'; then NET_OK=1; break; fi; sleep 4; done",
+      "[ $$NET_OK -eq 1 ] && echo '✅ Internet connected (TCP verified)!' || { echo '❌ CT 112 no internet! Check /tmp/provision_diag_112.log on host.'; exit 99; }",
 
       # 3. Inisialisasi OpenRC (fix 'softlevel not set')
       "/usr/bin/lxc-attach -n 112 -- sh -c 'mkdir -p /run/openrc && touch /run/openrc/softlevel'",
 
-      # 4. Install paket dasar (openssh DULUAN supaya sshd_config ada)
-      "/usr/bin/lxc-attach -n 112 -- apk update || true",
+      # 4. Install paket dasar (openssh DULUAN supaya sshd_config ada — apk update sudah berhasil di step 2)
       "/usr/bin/lxc-attach -n 112 -- apk add --no-cache openssh curl libc6-compat rsync openrc",
 
       # 5. Konfigurasi & start SSH
