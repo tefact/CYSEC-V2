@@ -46,6 +46,12 @@ variable "ct_memory" {
   default     = 128
 }
 
+variable "ct_swap" {
+  description = "SWAP memory untuk setiap CT (dalam MB)"
+  type        = number
+  default     = 128
+}
+
 variable "ct_disk_size" {
   description = "Ukuran disk untuk setiap CT (dalam GB)"
   type        = number

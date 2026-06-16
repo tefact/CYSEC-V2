@@ -57,6 +57,7 @@ resource "proxmox_virtual_environment_container" "web1" {
 
   memory {
     dedicated = var.ct_memory
+    swap      = var.ct_swap
   }
 
   disk {
@@ -246,6 +247,7 @@ resource "proxmox_virtual_environment_container" "web2" {
 
   memory {
     dedicated = var.ct_memory
+    swap      = var.ct_swap
   }
 
   disk {

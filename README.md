@@ -101,14 +101,7 @@ Pipeline ini memiliki **3 layer self-healing** yang otomatis memperbaiki masalah
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Mengapa Self-Healing?
 
-| Masalah | Root Cause | Auto-Repair |
-|---------|-----------|-------------|
-| `exit 99` (apk update) | Alpine LXC tidak punya DNS di `/etc/resolv.conf` | Re-apply nameserver 1.1.1.1 + 8.8.8.8 |
-| `exit 23` (rsync) | `/var/www/html` owned by root, deploy user can't write | `chmod -R 777` via `lxc-attach` |
-| SSH not ready | sshd belum start setelah CT boot | `rc-service sshd restart` via Proxmox host |
-| Network race | Alpine template DHCP conflict / interface down | Flush + re-apply static IP + restart networking |
 
 ---
 
@@ -131,20 +124,7 @@ Minimal yang harus sudah ada sebelum memulai:
 >
 > Self-hosted runner adalah "jembatan" antara GitHub Cloud dan jaringan lokal Proxmox. GitHub tidak bisa langsung menembak IP private 10.10.10.x — runner lah yang menerima instruksi dari GitHub lalu mengeksekusinya di jaringan lokal.
 
-### 1.0 — Pilih Lokasi Runner
-
-| Opsi | Deskripsi | Verdict |
-|------|-----------|---------|
-| **🅰️ CT Dedicated (REKOMENDASI)** | Buat LXC khusus `github-runner` | ✅ **Best Practice** — isolasi sempurna |
-| 🅱️ Host Proxmox langsung | Install di node1/node2 | ❌ **DOSA BESAR** — hypervisor bukan tempat app! |
-| 🅲️ Nebeng di CT web | Install di web1/web2 | ❌ **Anti-pattern** — rsync ke localhost? Aneh. |
-
-#### 🅰️ Opsi A — CT Dedicated (WAJIB Pilih Ini!)
-
-**Mengapa?** Konsep *Isolation of Blast Radius*:
-- Jika runner dieksploitasi → yang hancur cuma CT runner. Web server & hypervisor aman.
-- Resource terkunci — runner tidak merebut RAM/CPU web server.
-- Clean separation sesuai standar industri.
+### 1.0 — Lokasi Runner: CT Dedicated (Opsi A)
 
 > 💡 **Asas Kemalasan Hakiki:** Daripada buat CT Runner manual lewat GUI, kamu juga bisa definisikan mesin `github-runner` ini di file `main.tf` Terraform sekalian! Tapi untuk bootstrap awal, kita perlu minimal 1 runner manual dulu agar Terraform bisa dijalankan.
 
@@ -157,23 +137,11 @@ Minimal yang harus sudah ada sebelum memulai:
 | Template | **Debian 13** atau **Ubuntu 24.04** |
 | CPU | 1 cores |
 | RAM | 128 MB |
+| SWAP | 128 MB |
 | Disk | 3 GB |
 | Network | Bridge `vmbr0`, IP: `10.10.10.110/24`, GW: `10.10.10.1` |
 
 > ⚠️ **JANGAN pakai Alpine Linux untuk runner!** GitHub Actions Runner butuh **glibc**. Alpine pakai **musl libc** yang tidak kompatibel — binary runner akan crash saat startup.
-
-#### 🚫 Mengapa Opsi B = Dosa Besar?
-
-Menginstall aplikasi pihak ketiga langsung di host Proxmox itu **TABU**:
-- Jika runner dieksploitasi → penyerang dapat akses **root ke hypervisor fisik**
-- Bisa menghapus SELURUH VM dan CT dalam satu detik
-- Melanggar prinsip: *"Hypervisor hanya untuk hypervisor"*
-
-#### 🚫 Mengapa Opsi C = Anti-Pattern?
-
-- Runner di web1 melakukan rsync ke... dirinya sendiri (localhost)? Absurd.
-- Proses runner makan resource web server — user bisa kena lag saat deploy
-- Tidak mencerminkan arsitektur deployment skala besar di industri
 
 ### 1.1 — Persiapan Mesin Runner
 
@@ -226,8 +194,8 @@ curl -o actions-runner-linux-x64-2.321.0.tar.gz -L \
   https://github.com/actions/runner/releases/download/v2.321.0/actions-runner-linux-x64-2.321.0.tar.gz
 tar xzf ./actions-runner-linux-x64-2.321.0.tar.gz
 
-# Konfigurasi — ganti URL dan TOKEN sesuai milikmu
-./config.sh --url https://github.com/USERNAME/NAMA-REPO --token TOKEN_DARI_GITHUB
+# Konfigurasi — ganti NAMA-REPO sesuai milikmu
+./config.sh --url https://github.com/Org-Name/NAMA-REPO --token TOKEN_DARI_GITHUB
 ```
 
 Saat ditanya interaktif:
@@ -239,6 +207,13 @@ Enter the name of work folder: [tekan Enter untuk default "_work"]
 ```
 
 ### 1.3 — Install Sebagai Service (Auto-Start)
+
+> ⚠️ **JANGAN jalankan `./run.sh`!** GitHub mungkin menampilkan perintah ini di halaman runner:
+> ```
+> # Last step, run it!
+> $ ./run.sh
+> ```
+> Ini hanya untuk test interaktif — **runner tidak akan jalan otomatis saat CT restart.** Langsung lanjut ke install service di bawah.
 
 ```bash
 # Kembali ke root untuk install service
@@ -356,6 +331,24 @@ root@pam!terraform=a1b2c3d4-e5f6-7890-abcd-ef1234567890
 > ⚠️ **PENTING:** Copy **SELURUH string lengkap** termasuk `root@pam!terraform=` di depannya!
 > Yang dimasukkan ke Secret itu **BUKAN** cuma UUID-nya (`a1b2c3d4-...`), tapi **LENGKAP** dari awal sampai akhir!
 
+### 3.3.1 — Cara Buat Cloudflare Tunnel Token (`CF_TUNNEL_TOKEN`):
+
+1. Login ke **Cloudflare Zero Trust Dashboard** (https://one.cloudflare.com)
+2. Ke **Networks** → **Tunnels**
+3. Klik **Create a tunnel**
+4. Pilih **Cloudflared** → klik **Next**
+5. Beri nama tunnel (contoh: `web-ha`) → klik **Save tunnel**
+6. Di halaman berikutnya, pilih environment **Debian** / **64-bit**
+7. **COPY token yang muncul** — ini adalah `CF_TUNNEL_TOKEN` kamu!
+
+```
+Format token:
+eyJhIjoiNjk2MT...(string panjang base64)...
+```
+
+> ⚠️ Token ini hanya muncul **sekali saat pembuatan**. Simpan segera ke GitHub Secret `CF_TUNNEL_TOKEN`!
+> Token sudah embed tunnel ID + credentials di dalamnya — cloudflared akan langsung terhubung ke tunnel yang kamu buat.
+
 ### 3.4 — Cara Paste `DEPLOY_KEY` (Private Key):
 
 ```bash
@@ -421,17 +414,6 @@ chmod 600 /root/.ssh/authorized_keys
 
 > 💡 **Kenapa perlu?** Terraform tidak bisa pakai API Proxmox untuk provisioning LXC (Alpine SSH belum aktif). Jadi Terraform SSH ke host dulu → `lxc-attach` ke dalam CT → setup networking + SSH dari dalam.
 
-**Verifikasi dari runner:**
-```bash
-# Di runner (10.10.10.110), test SSH ke kedua Proxmox host:
-ssh -i ~/.ssh/id_ed25519 root@10.10.10.201 "echo node1 OK"
-ssh -i ~/.ssh/id_ed25519 root@10.10.10.202 "echo node2 OK"
-```
-
-Kalau langsung masuk tanpa password → **aman!** 🎉
-
-> 🧹 **Tips:** Cek `authorized_keys` untuk entry duplikat atau placeholder `YOUR_DEPLOY_PUBLIC_KEY` yang belum diganti — hapus yang tidak perlu!
-
 **Verifikasi known_hosts di runner (WAJIB!):**
 
 > ⚠️ **INI PENYEBAB UTAMA GAGAL!** Kalau runner belum pernah SSH ke suatu host, fingerprint host belum ada di `known_hosts`. Terraform **tidak bisa** jawab prompt interaktif “Are you sure?” — hasilnya langsung GAGAL.
@@ -455,13 +437,22 @@ ssh-keygen -lf ~/.ssh/id_ed25519
 # Fingerprint ini HARUS SAMA dengan public key di authorized_keys Proxmox host!
 ```
 
+**Verifikasi dari runner:**
+```bash
+# Di runner (10.10.10.110), test SSH ke kedua Proxmox host:
+ssh -i ~/.ssh/id_ed25519 root@10.10.10.201 "echo node1 OK"
+ssh -i ~/.ssh/id_ed25519 root@10.10.10.202 "echo node2 OK"
+```
+
+Kalau langsung masuk tanpa password → **aman!** 🎉
+
+> 🧹 **Tips:** Cek `authorized_keys` untuk entry duplikat atau placeholder `YOUR_DEPLOY_PUBLIC_KEY` yang belum diganti — hapus yang tidak perlu!
+
 ---
 
-## 🏗️ Step 4: Provisioning Infrastruktur (Pilih Jalan Ninjamu!)
+## 🏗️ Step 4: Provisioning Infrastruktur dengan Terraform
 
 Sebelum file website bisa di-deploy, kita butuh dua LXC Container (`web1` & `web2`) sebagai server target.
-
-### 🅰️ Opsi A: Jalur Otomatis dengan Terraform (SANGAT DIREKOMENDASIKAN)
 
 > **Kamu tidak perlu buka GUI Proxmox. Kamu tidak perlu SSH manual. Kamu tidak perlu `nano` apapun.**
 
@@ -518,6 +509,10 @@ variable "ct_memory" {
   default = 128   # Dalam MB
 }
 
+variable "ct_swap" {
+  default = 128   # Dalam MB
+}
+
 variable "ct_disk_size" {
   default = 1     # Dalam GB
 }
@@ -542,51 +537,7 @@ variable "proxmox_node2_host" {
 - Push kedua, ketiga, dst: Terraform cek → "udah sesuai" → **skip**
 - CT hanya di-recreate jika kamu ubah konfigurasi di `main.tf`
 
----
 
-### 🅱️ Opsi B: Jalur Manual (Jika Kamu Kurang Kerjaan)
-
-> ⚠️ Pilih ini HANYA jika CT web sudah dibuat sebelumnya atau kamu tidak ingin pakai Terraform.
-
-Jika memilih jalur manual, kamu harus:
-
-**B.1 — Buat CT manual via GUI Proxmox:**
-- Buat `web1` di node1: IP 10.10.10.111/24, GW 10.10.10.1
-- Buat `web2` di node2: IP 10.10.10.112/24, GW 10.10.10.1
-- Install nginx + rsync di kedua CT: `apk add nginx rsync openssh`
-
-**B.2 — Tanam Public Key MANUAL ke kedua CT:**
-
-SSH ke web1:
-```bash
-ssh root@10.10.10.111
-
-# Buat folder .ssh
-mkdir -p ~/.ssh && chmod 700 ~/.ssh
-
-# Paste public key dari runner (isi cat ~/.ssh/id_ed25519.pub)
-echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5... github-deploy-key" >> ~/.ssh/authorized_keys
-chmod 600 ~/.ssh/authorized_keys
-```
-
-Ulangi untuk web2:
-```bash
-ssh root@10.10.10.112
-mkdir -p ~/.ssh && chmod 700 ~/.ssh
-echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5... github-deploy-key" >> ~/.ssh/authorized_keys
-chmod 600 ~/.ssh/authorized_keys
-```
-
-**B.3 — Test koneksi dari runner:**
-```bash
-# Di mesin runner:
-ssh -i ~/.ssh/id_ed25519 root@10.10.10.111 "echo 'web1 OK!'"
-ssh -i ~/.ssh/id_ed25519 root@10.10.10.112 "echo 'web2 OK!'"
-```
-
-Kalau langsung masuk tanpa password → berhasil! 🎉
-
----
 
 ## 🚀 Step 5: Push Kode & Deploy Otomatis!
 
@@ -803,23 +754,6 @@ ssh root@10.10.10.112 "apk add rsync"
 **Penyebab:** `PVE_API_TOKEN` salah format atau expired.
 
 **Solusi:** Pastikan value di Secret adalah **LENGKAP**: `root@pam!terraform=uuid-value-here` (termasuk bagian depannya!). Bukan cuma UUID.
-
-### ❌ Cloudflare Tunnel `0 Connections`
-
-**Penyebab:** `cloudflared` service mati di kedua CT.
-
-**Solusi:**
-```bash
-# Cek status di masing-masing CT
-ssh root@10.10.10.111 "rc-service cloudflared status"
-ssh root@10.10.10.112 "rc-service cloudflared status"
-
-# Restart jika mati
-ssh root@10.10.10.111 "rc-service cloudflared restart"
-ssh root@10.10.10.112 "rc-service cloudflared restart"
-```
-
-> Jika masih gagal, cek apakah `libc6-compat` terinstall: `apk add libc6-compat`
 
 ---
 

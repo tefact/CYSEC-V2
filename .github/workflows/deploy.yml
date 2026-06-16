@@ -43,8 +43,8 @@ jobs:
   # =========================================================================
   # Job ini jalan duluan. Terraform bakal:
   #   1. Download template Debian 13 dari internet
-  #   2. Buat CT web1 di node node1 (VMID 112)
-  #   3. Buat CT web2 di node node2 (VMID 111)
+  #   2. Buat CT web1 di node node1 (VMID 111)
+  #   3. Buat CT web2 di node node2 (VMID 112)
   #   4. Tanam SSH public key ke kedua CT
   #
   # Kalau container udah ada, Terraform skip (idempoten).
