@@ -15,6 +15,17 @@ provider "proxmox" {
 }
 
 # ==========================================
+# 🔑 SSH Key Trackers (trigger CT replace on key change)
+# ==========================================
+resource "terraform_data" "ssh_key_web1" {
+  input = var.ssh_public_key
+}
+
+resource "terraform_data" "ssh_key_web2" {
+  input = var.ssh_public_key
+}
+
+# ==========================================
 # 🌐 LXC 1 — CT web1 (Node: node1)
 # ==========================================
 resource "proxmox_virtual_environment_container" "web1" {
@@ -69,7 +80,7 @@ resource "proxmox_virtual_environment_container" "web1" {
 
   # Force recreate CTs when SSH key changes (GitHub Secret update)
   lifecycle {
-    replace_triggered_by = [var.ssh_public_key]
+    replace_triggered_by = [terraform_data.ssh_key_web1]
   }
 
   # ── Host-Based Provisioning: SSH ke Proxmox host → lxc-attach ke dalam CT ──
@@ -258,7 +269,7 @@ resource "proxmox_virtual_environment_container" "web2" {
 
   # Force recreate CTs when SSH key changes (GitHub Secret update)
   lifecycle {
-    replace_triggered_by = [var.ssh_public_key]
+    replace_triggered_by = [terraform_data.ssh_key_web2]
   }
 
   # ── Host-Based Provisioning: SSH ke Proxmox host → lxc-attach ke dalam CT ──
