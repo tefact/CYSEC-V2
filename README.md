@@ -432,6 +432,29 @@ Kalau langsung masuk tanpa password → **aman!** 🎉
 
 > 🧹 **Tips:** Cek `authorized_keys` untuk entry duplikat atau placeholder `YOUR_DEPLOY_PUBLIC_KEY` yang belum diganti — hapus yang tidak perlu!
 
+**Verifikasi known_hosts di runner (WAJIB!):**
+
+> ⚠️ **INI PENYEBAB UTAMA GAGAL!** Kalau runner belum pernah SSH ke suatu host, fingerprint host belum ada di `known_hosts`. Terraform **tidak bisa** jawab prompt interaktif “Are you sure?” — hasilnya langsung GAGAL.
+
+```bash
+# Di runner, tambahkan semua host key ke known_hosts:
+ssh-keyscan -H 10.10.10.201 >> ~/.ssh/known_hosts 2>/dev/null
+ssh-keyscan -H 10.10.10.202 >> ~/.ssh/known_hosts 2>/dev/null
+ssh-keyscan -H 10.10.10.111 >> ~/.ssh/known_hosts 2>/dev/null
+ssh-keyscan -H 10.10.10.112 >> ~/.ssh/known_hosts 2>/dev/null
+```
+
+> 💡 Workflow sudah include step `ssh-keyscan` otomatis di **provision job** dan **deploy job**. Tapi untuk first-time setup, jalankan manual dulu!
+
+**Verifikasi key fingerprint match (DEPLOY_KEY Secret ↔ runner):**
+```bash
+# Di runner, cek fingerprint key lokal:
+ssh-keygen -lf ~/.ssh/id_ed25519
+# Output: 256 SHA256:xxxxx... github-deploy-key (ED25519)
+
+# Fingerprint ini HARUS SAMA dengan public key di authorized_keys Proxmox host!
+```
+
 ---
 
 ## 🏗️ Step 4: Provisioning Infrastruktur (Pilih Jalan Ninjamu!)
@@ -725,6 +748,33 @@ ssh root@10.10.10.111 "chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys"
 
 # Pastikan DEPLOY_USER di Secrets match (harus "root")
 ```
+
+### ❌ Terraform `SSH authentication failed (root@10.10.10.20x:22)`
+
+**Penyebab:** Ada **3 kemungkinan** — dan ini error paling umum saat first-time setup!
+
+| # | Root Cause | Gejala | Fix |
+|---|-----------|---------|------|
+| 1 | **Host key belum di `known_hosts`** | Node 1 OK, node 2 gagal | `ssh-keyscan -H 10.10.10.202 >> ~/.ssh/known_hosts` |
+| 2 | **Public key belum di `authorized_keys` Proxmox host** | Kedua node gagal | Tambahkan public key ke `/root/.ssh/authorized_keys` di host |
+| 3 | **`DEPLOY_KEY` Secret tidak match** key di host | Fingerprint berbeda | Re-paste `cat ~/.ssh/id_ed25519` ke GitHub Secret |
+
+**Diagnosa lengkap dari runner:**
+```bash
+# 1. Test SSH ke kedua Proxmox host
+ssh -i ~/.ssh/id_ed25519 root@10.10.10.201 "echo node1 OK"
+ssh -i ~/.ssh/id_ed25519 root@10.10.10.202 "echo node2 OK"
+
+# 2. Kalau salah satu minta “Are you sure?” → known_hosts issue!
+ssh-keyscan -H 10.10.10.201 >> ~/.ssh/known_hosts 2>/dev/null
+ssh-keyscan -H 10.10.10.202 >> ~/.ssh/known_hosts 2>/dev/null
+
+# 3. Cek fingerprint match
+ssh-keygen -lf ~/.ssh/id_ed25519
+# Bandingkan dengan: cat /root/.ssh/authorized_keys di Proxmox host
+```
+
+> 💡 **Catatan:** Error message bilang `attempted methods [none publickey]` — ini bisa berarti key DITOLAK (auth issue) ATAU host key tidak dikenal (known_hosts issue). Cek keduanya!
 
 ### ❌ `Host key verification failed`
 
