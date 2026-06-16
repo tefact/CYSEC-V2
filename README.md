@@ -66,7 +66,7 @@ Pipeline ini memiliki **3 layer self-healing** yang otomatis memperbaiki masalah
 │  └─────────────────────────────────────────────────────────┘             │
 │       │                                                                  │
 │       ▼                                                                  │
-│  OpenRC init → apk add openssh/curl/rsync → SSH config                  │
+│  OpenRC init → apk add openssh/curl/rsync/nginx → SSH config            │
 │  → mkdir /var/www/html (chmod 777) → cloudflared tunnel service         │
 │                                                                          │
 └──────────────────────────────────────────────────────────────────────────┘
@@ -415,7 +415,8 @@ Cukup pastikan file `terraform/variables.tf` sudah sesuai spesifikasi keinginanm
 5. ✅ Start kedua CT
 6. ✅ **Self-healing network setup: flush → static IP → DNS → connectivity check**
 7. ✅ **Install OpenSSH + configure sshd + Cloudflared tunnel via `lxc-attach`**
-8. ✅ **Buat `/var/www/html` (chmod 777) untuk rsync target**
+8. ✅ **Install + configure nginx (serve `/var/www/html` di port 80)**
+9. ✅ **Buat `/var/www/html` (chmod 777) untuk rsync target**
 
 **Kamu langsung skip ke Step 5. Tidak ada kerja manual!** 🎉
 
@@ -439,6 +440,7 @@ terraform/
 >    - Self-healing `apk update` loop (150s, repair at 25%/50%/75%)
 >    - Enable SSH (`PermitRootLogin`, `PubkeyAuthentication`, start sshd)
 >    - Install Cloudflare Tunnel + buat OpenRC init script
+>    - Install + configure nginx (root `/var/www/html`, port 80)
 >    - Buat `/var/www/html` dengan `chmod 777`
 > 3. CT sekarang siap menerima rsync di Tahap 2!
 >
@@ -558,7 +560,7 @@ Push ke main
 │  Step 2: known_hosts (CT + PVE)     │
 │  Step 3: SSH readiness (self-heal)  │  ← Retry + lxc-attach repair sshd
 │  Step 4: Rsync parallel (self-heal) │  ← Retry + fix perms via Proxmox
-│  Step 5: Fix permissions (chmod)    │
+│  Step 5: Fix permissions + reload nginx  │
 │  Step 6: Cleanup SSH key            │
 └─────────────────────────────────────┘
 ```
@@ -751,7 +753,7 @@ CYSEC-V2/
 │   ├── download-template.tf.example← (Opsional) Auto-download Alpine template
 │   └── .gitignore                  ← Exclude .terraform/, *.tfstate
 │
-├── portfolio (1).html              ← Halaman utama website (HTML)
+├── index.html                    ← Halaman utama website (HTML)
 ├── style.css                       ← Stylesheet utama (3400+ baris)
 ├── script.js                       ← JavaScript interaktif (935 baris)
 ├── cinematic-intro.css             ← Cinematic intro animation styles
@@ -789,7 +791,7 @@ CYSEC-V2/
     │   ├── --no-perms --no-owner --no-group (Alpine-safe)
     │   ├── --exclude .git* .github* terraform/
     │   └── Repair: chmod 777 + restart sshd + re-apply DNS
-    ├── 🔒 Fix permissions (chmod 755/644, no www-data)
+    ├── 🔒 Fix permissions + reload nginx (chmod 755/644)
     └── 🧹 Cleanup SSH key (always run)
 ```
 
