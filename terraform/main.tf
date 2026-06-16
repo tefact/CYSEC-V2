@@ -67,34 +67,38 @@ resource "proxmox_virtual_environment_container" "web1" {
     nesting = true
   }
 
-  # ── Host-Based Provisioning: SSH ke Proxmox host → pct exec ke dalam CT ──
-  # Bypass 403 hookscript & "no route to host" — bulletproof edition!
+  # ── Host-Based Provisioning: SSH ke Proxmox host → lxc-attach ke dalam CT ──
+  # lxc-attach bypass bug Perl pct exec yang hang 100% CPU di Alpine unprivileged.
   provisioner "remote-exec" {
     inline = [
       # 1. Tunggu CT benar-benar running
       "until pct status 111 | grep -q 'running'; do sleep 2; done",
 
-      # 2. Tunggu jaringan siap (ping Cloudflare DNS)
-      "echo '⏳ Menunggu koneksi internet di dalam CT...'",
-      "until pct exec 111 -- ping -c 1 -W 2 1.1.1.1 >/dev/null 2>&1; do sleep 2; done",
-      "echo '✅ Internet ready! Mulai instalasi...'",
+      # 2. Tunggu jaringan siap (bounded: maks 15 x 3s = 45s, lalu fail fast)
+      "echo '⏳ Menunggu koneksi internet di dalam CT (maks 45s)...'",
+      "CONNECTED=0; for i in $(seq 1 15); do if lxc-attach -n 111 -- ping -c 1 -W 2 1.1.1.1 >/dev/null 2>&1; then CONNECTED=1; break; fi; echo \"  attempt $$i/15...\"; sleep 3; done",
+      "[ $CONNECTED -eq 1 ] && echo '✅ Internet ready!' || { echo '❌ CT tidak punya akses internet!'; exit 1; }",
 
-      # 3. Install semua paket sekaligus (openssh DULUAN supaya sshd_config ada)
-      "pct exec 111 -- apk update",
-      "pct exec 111 -- apk add --no-cache openssh curl libc6-compat rsync",
+      # 3. Install semua paket (openssh DULUAN supaya sshd_config ada)
+      "lxc-attach -n 111 -- apk update",
+      "lxc-attach -n 111 -- apk add --no-cache openssh curl libc6-compat rsync openrc",
 
-      # 4. Konfigurasi SSH (file sekarang dijamin ada)
-      "pct exec 111 -- sh -c 'sed -i \"s/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/\" /etc/ssh/sshd_config'",
-      "pct exec 111 -- sh -c 'sed -i \"s/^#*PubkeyAuthentication.*/PubkeyAuthentication yes/\" /etc/ssh/sshd_config'",
-      "pct exec 111 -- rc-update add sshd default",
-      "pct exec 111 -- rc-service sshd start",
+      # 4. Konfigurasi & start SSH (file dijamin ada setelah apk add openssh)
+      "lxc-attach -n 111 -- sh -c 'sed -i \"s/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/\" /etc/ssh/sshd_config'",
+      "lxc-attach -n 111 -- sh -c 'sed -i \"s/^#*PubkeyAuthentication.*/PubkeyAuthentication yes/\" /etc/ssh/sshd_config'",
+      "lxc-attach -n 111 -- rc-update add sshd default",
+      "lxc-attach -n 111 -- rc-service sshd start",
       "sleep 3",
 
-      # 5. Install Cloudflare Tunnel (Distributed Replica)
-      "pct exec 111 -- curl -L --output /usr/local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64",
-      "pct exec 111 -- chmod +x /usr/local/bin/cloudflared",
-      "pct exec 111 -- cloudflared service install ${var.cf_tunnel_token}",
-      "pct exec 111 -- sh -c 'rc-update add cloudflared default && rc-service cloudflared start'"
+      # 5. Download & install Cloudflare Tunnel
+      "lxc-attach -n 111 -- curl -L --output /usr/local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64",
+      "lxc-attach -n 111 -- chmod +x /usr/local/bin/cloudflared",
+
+      # 6. Buat OpenRC init script untuk cloudflared (Alpine tidak pakai systemd)
+      "lxc-attach -n 111 -- sh -c 'cat > /etc/init.d/cloudflared << INITEOF\n#!/sbin/openrc-run\nname=\"cloudflared\"\ndescription=\"Cloudflare Tunnel\"\ncommand=\"/usr/local/bin/cloudflared\"\ncommand_args=\"tunnel --no-autoupdate run --token ${var.cf_tunnel_token}\"\ncommand_background=\"true\"\npidfile=\"/run/cloudflared.pid\"\ndepend() { need net; }\nINITEOF'",
+      "lxc-attach -n 111 -- chmod +x /etc/init.d/cloudflared",
+      "lxc-attach -n 111 -- rc-update add cloudflared default",
+      "lxc-attach -n 111 -- rc-service cloudflared start"
     ]
   }
 
@@ -104,7 +108,7 @@ resource "proxmox_virtual_environment_container" "web1" {
     user        = "root"
     private_key = var.ssh_private_key
     host        = var.proxmox_node1_host
-    timeout     = "5m"
+    timeout     = "10m"
   }
 }
 
@@ -161,33 +165,37 @@ resource "proxmox_virtual_environment_container" "web2" {
     nesting = true
   }
 
-  # ── Host-Based Provisioning: SSH ke Proxmox host → pct exec ke dalam CT ──
+  # ── Host-Based Provisioning: SSH ke Proxmox host → lxc-attach ke dalam CT ──
   provisioner "remote-exec" {
     inline = [
       # 1. Tunggu CT benar-benar running
       "until pct status 112 | grep -q 'running'; do sleep 2; done",
 
-      # 2. Tunggu jaringan siap (ping Cloudflare DNS)
-      "echo '⏳ Menunggu koneksi internet di dalam CT...'",
-      "until pct exec 112 -- ping -c 1 -W 2 1.1.1.1 >/dev/null 2>&1; do sleep 2; done",
-      "echo '✅ Internet ready! Mulai instalasi...'",
+      # 2. Tunggu jaringan siap (bounded: maks 15 x 3s = 45s, lalu fail fast)
+      "echo '⏳ Menunggu koneksi internet di dalam CT (maks 45s)...'",
+      "CONNECTED=0; for i in $(seq 1 15); do if lxc-attach -n 112 -- ping -c 1 -W 2 1.1.1.1 >/dev/null 2>&1; then CONNECTED=1; break; fi; echo \"  attempt $$i/15...\"; sleep 3; done",
+      "[ $CONNECTED -eq 1 ] && echo '✅ Internet ready!' || { echo '❌ CT tidak punya akses internet!'; exit 1; }",
 
-      # 3. Install semua paket sekaligus (openssh DULUAN supaya sshd_config ada)
-      "pct exec 112 -- apk update",
-      "pct exec 112 -- apk add --no-cache openssh curl libc6-compat rsync",
+      # 3. Install semua paket (openssh DULUAN supaya sshd_config ada)
+      "lxc-attach -n 112 -- apk update",
+      "lxc-attach -n 112 -- apk add --no-cache openssh curl libc6-compat rsync openrc",
 
-      # 4. Konfigurasi SSH (file sekarang dijamin ada)
-      "pct exec 112 -- sh -c 'sed -i \"s/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/\" /etc/ssh/sshd_config'",
-      "pct exec 112 -- sh -c 'sed -i \"s/^#*PubkeyAuthentication.*/PubkeyAuthentication yes/\" /etc/ssh/sshd_config'",
-      "pct exec 112 -- rc-update add sshd default",
-      "pct exec 112 -- rc-service sshd start",
+      # 4. Konfigurasi & start SSH (file dijamin ada setelah apk add openssh)
+      "lxc-attach -n 112 -- sh -c 'sed -i \"s/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/\" /etc/ssh/sshd_config'",
+      "lxc-attach -n 112 -- sh -c 'sed -i \"s/^#*PubkeyAuthentication.*/PubkeyAuthentication yes/\" /etc/ssh/sshd_config'",
+      "lxc-attach -n 112 -- rc-update add sshd default",
+      "lxc-attach -n 112 -- rc-service sshd start",
       "sleep 3",
 
-      # 5. Install Cloudflare Tunnel (Distributed Replica)
-      "pct exec 112 -- curl -L --output /usr/local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64",
-      "pct exec 112 -- chmod +x /usr/local/bin/cloudflared",
-      "pct exec 112 -- cloudflared service install ${var.cf_tunnel_token}",
-      "pct exec 112 -- sh -c 'rc-update add cloudflared default && rc-service cloudflared start'"
+      # 5. Download & install Cloudflare Tunnel
+      "lxc-attach -n 112 -- curl -L --output /usr/local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64",
+      "lxc-attach -n 112 -- chmod +x /usr/local/bin/cloudflared",
+
+      # 6. Buat OpenRC init script untuk cloudflared (Alpine tidak pakai systemd)
+      "lxc-attach -n 112 -- sh -c 'cat > /etc/init.d/cloudflared << INITEOF\n#!/sbin/openrc-run\nname=\"cloudflared\"\ndescription=\"Cloudflare Tunnel\"\ncommand=\"/usr/local/bin/cloudflared\"\ncommand_args=\"tunnel --no-autoupdate run --token ${var.cf_tunnel_token}\"\ncommand_background=\"true\"\npidfile=\"/run/cloudflared.pid\"\ndepend() { need net; }\nINITEOF'",
+      "lxc-attach -n 112 -- chmod +x /etc/init.d/cloudflared",
+      "lxc-attach -n 112 -- rc-update add cloudflared default",
+      "lxc-attach -n 112 -- rc-service cloudflared start"
     ]
   }
 
@@ -197,6 +205,6 @@ resource "proxmox_virtual_environment_container" "web2" {
     user        = "root"
     private_key = var.ssh_private_key
     host        = var.proxmox_node2_host
-    timeout     = "5m"
+    timeout     = "10m"
   }
 }
