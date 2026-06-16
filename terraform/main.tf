@@ -145,6 +145,23 @@ resource "proxmox_virtual_environment_container" "web1" {
       # 5.5. Buat web root directory + chmod 777 (rsync user perlu tulis)
       "/usr/bin/lxc-attach -n 111 -- sh -c 'mkdir -p /var/www/html && chmod -R 777 /var/www/html'",
 
+      # 5.6. Install + konfigurasi nginx (serve /var/www/html di port 80)
+      "/usr/bin/lxc-attach -n 111 -- apk add --no-cache nginx",
+      "echo 'server {' > /tmp/nginx_111",
+      "echo '    listen 80 default_server;' >> /tmp/nginx_111",
+      "echo '    listen [::]:80 default_server;' >> /tmp/nginx_111",
+      "echo '    root /var/www/html;' >> /tmp/nginx_111",
+      "echo '    index index.html index.htm;' >> /tmp/nginx_111",
+      "echo '    server_name _;' >> /tmp/nginx_111",
+      "echo '    location / {' >> /tmp/nginx_111",
+      "echo '        try_files \$uri \$uri/ =404;' >> /tmp/nginx_111",
+      "echo '    }' >> /tmp/nginx_111",
+      "echo '}' >> /tmp/nginx_111",
+      "pct push 111 /tmp/nginx_111 /etc/nginx/http.d/default.conf",
+      "rm -f /tmp/nginx_111",
+      "/usr/bin/lxc-attach -n 111 -- rc-update add nginx default || true",
+      "/usr/bin/lxc-attach -n 111 -- rc-service nginx restart || true",
+
       # 6. Download cloudflared binary
       "/usr/bin/lxc-attach -n 111 -- curl -L --output /usr/local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64",
       "/usr/bin/lxc-attach -n 111 -- chmod +x /usr/local/bin/cloudflared",
@@ -311,6 +328,23 @@ resource "proxmox_virtual_environment_container" "web2" {
 
       # 5.5. Buat web root directory + chmod 777 (rsync user perlu tulis)
       "/usr/bin/lxc-attach -n 112 -- sh -c 'mkdir -p /var/www/html && chmod -R 777 /var/www/html'",
+
+      # 5.6. Install + konfigurasi nginx (serve /var/www/html di port 80)
+      "/usr/bin/lxc-attach -n 112 -- apk add --no-cache nginx",
+      "echo 'server {' > /tmp/nginx_112",
+      "echo '    listen 80 default_server;' >> /tmp/nginx_112",
+      "echo '    listen [::]:80 default_server;' >> /tmp/nginx_112",
+      "echo '    root /var/www/html;' >> /tmp/nginx_112",
+      "echo '    index index.html index.htm;' >> /tmp/nginx_112",
+      "echo '    server_name _;' >> /tmp/nginx_112",
+      "echo '    location / {' >> /tmp/nginx_112",
+      "echo '        try_files \$uri \$uri/ =404;' >> /tmp/nginx_112",
+      "echo '    }' >> /tmp/nginx_112",
+      "echo '}' >> /tmp/nginx_112",
+      "pct push 112 /tmp/nginx_112 /etc/nginx/http.d/default.conf",
+      "rm -f /tmp/nginx_112",
+      "/usr/bin/lxc-attach -n 112 -- rc-update add nginx default || true",
+      "/usr/bin/lxc-attach -n 112 -- rc-service nginx restart || true",
 
       # 6. Download cloudflared binary
       "/usr/bin/lxc-attach -n 112 -- curl -L --output /usr/local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64",

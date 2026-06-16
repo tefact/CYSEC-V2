@@ -296,15 +296,15 @@ jobs:
 
           echo "🎉 Kedua deploy sukses!"
 
-      # ── Step 5: Set permission yang benar di kedua CT ───────────────────
+      # ── Step 5: Set permission + reload nginx di kedua CT ─────────────
       # Alpine tidak punya www-data, jadi pakai chmod universal saja.
-      # File readable + executable oleh semua user (nginx/apache/cloudflared).
-      - name: 🔒 Fix file permissions on both CTs
+      # Setelah permission fix, reload nginx supaya serve file terbaru.
+      - name: 🔒 Fix permissions + reload nginx on both CTs
         env:
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
         run: |
           set +e
-          echo "🔧 Set permission /var/www/html/ di kedua CT..."
+          echo "🔧 Fix permission + reload nginx di kedua CT..."
 
           for IP in 10.10.10.111 10.10.10.112; do
             echo "  → $IP ..."
@@ -312,11 +312,12 @@ jobs:
               "${DEPLOY_USER}@${IP}" "\
               find /var/www/html/ -type d -exec chmod 755 {} \; && \
               find /var/www/html/ -type f -exec chmod 644 {} \; && \
-              echo '  ✅ Permission OK'\
+              rc-service nginx reload 2>/dev/null || /etc/init.d/nginx reload 2>/dev/null || true && \
+              echo '  ✅ Permission OK + nginx reloaded'\
               "
           done
 
-          echo "🔒 Semua permission sudah benar!"
+          echo "🔒 Semua permission sudah benar, nginx reloaded!"
 
       # ── Step 6: Cleanup SSH key ─────────────────────────────────────────
       # Hapus key sementara biar nggak bocor ke step lain atau runner lain.
