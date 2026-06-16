@@ -396,6 +396,42 @@ ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbCdEfGhIjKlMnOpQrStUvWxYz github-deploy-ke
 ☐ CF_TUNNEL_TOKEN   → (token dari Cloudflare Dashboard)
 ```
 
+### 🔐 Step 3.6: Tanam Public Key ke Proxmox Host (WAJIB!)
+
+> ⚠️ **INI SERING TERLEWAT!** Terraform perlu SSH ke **Proxmox host** (node1 & node2) untuk menjalankan `lxc-attach`. Tanpa key ini, pipeline GAGAL dengan error `SSH authentication failed`.
+
+SSH ke **setiap Proxmox node** (via Proxmox Web Console atau fisik), lalu jalankan:
+
+**Node 1 (10.10.10.201):**
+```bash
+# Pastikan directory ada
+mkdir -p /root/.ssh && chmod 700 /root/.ssh
+
+# Paste public key yang SAMA dengan DEPLOY_PUBLIC_KEY di GitHub Secrets
+echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK/HVq... github-deploy-key" >> /root/.ssh/authorized_keys
+chmod 600 /root/.ssh/authorized_keys
+```
+
+**Node 2 (10.10.10.202):**
+```bash
+mkdir -p /root/.ssh && chmod 700 /root/.ssh
+echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK/HVq... github-deploy-key" >> /root/.ssh/authorized_keys
+chmod 600 /root/.ssh/authorized_keys
+```
+
+> 💡 **Kenapa perlu?** Terraform tidak bisa pakai API Proxmox untuk provisioning LXC (Alpine SSH belum aktif). Jadi Terraform SSH ke host dulu → `lxc-attach` ke dalam CT → setup networking + SSH dari dalam.
+
+**Verifikasi dari runner:**
+```bash
+# Di runner (10.10.10.110), test SSH ke kedua Proxmox host:
+ssh -i ~/.ssh/id_ed25519 root@10.10.10.201 "echo node1 OK"
+ssh -i ~/.ssh/id_ed25519 root@10.10.10.202 "echo node2 OK"
+```
+
+Kalau langsung masuk tanpa password → **aman!** 🎉
+
+> 🧹 **Tips:** Cek `authorized_keys` untuk entry duplikat atau placeholder `YOUR_DEPLOY_PUBLIC_KEY` yang belum diganti — hapus yang tidak perlu!
+
 ---
 
 ## 🏗️ Step 4: Provisioning Infrastruktur (Pilih Jalan Ninjamu!)

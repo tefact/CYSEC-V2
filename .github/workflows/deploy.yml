@@ -61,6 +61,16 @@ jobs:
       - name: 🏗️ Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
+      # ── Step 2.5: Add Proxmox hosts ke known_hosts (WAJIB sebelum Terraform SSH!) ──
+      # Tanpa ini, Terraform SSH ke node2 gagal karena host key belum dikenal.
+      # deploy job punya step yang sama, tapi provision job jalan DULUAN.
+      - name: 🔐 Add Proxmox hosts to known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H 10.10.10.201 >> ~/.ssh/known_hosts 2>/dev/null
+          ssh-keyscan -H 10.10.10.202 >> ~/.ssh/known_hosts 2>/dev/null
+          echo "✅ Proxmox hosts added to known_hosts"
+
       # ── Step 3: Terraform Init ──────────────────────────────────────────
       - name: 📦 Terraform Init
         working-directory: terraform
