@@ -98,60 +98,181 @@ jobs:
           echo "${{ secrets.DEPLOY_KEY }}" > /tmp/deploy_ssh_key
           chmod 600 /tmp/deploy_ssh_key
 
-          # Tambahkan fingerprint kedua host ke known_hosts
-          # supaya rsync nggak nanya prompt "Are you sure?"
+          # Tambahkan fingerprint CT + Proxmox host ke known_hosts
+          # supaya SSH nggak nanya prompt "Are you sure?"
           mkdir -p ~/.ssh
           ssh-keyscan -H 10.10.10.111 >> ~/.ssh/known_hosts 2>/dev/null
           ssh-keyscan -H 10.10.10.112 >> ~/.ssh/known_hosts 2>/dev/null
+          ssh-keyscan -H 10.10.10.201 >> ~/.ssh/known_hosts 2>/dev/null
+          ssh-keyscan -H 10.10.10.202 >> ~/.ssh/known_hosts 2>/dev/null
 
-      # ── Step 3: Deploy ke KEDUA container secara PARALEL ─────────────────
-      # Kita spawn 2 rsync di background (&) lalu wait — jadi deploy
-      # ke web1 dan web2 berjalan bareng, hemat waktu ~50%.
-      - name: 🚀 Rsync to CT web1 & CT web2 (parallel)
+      # ── Step 3: Tunggu SSH siap di kedua CT (self-healing retry loop) ──
+      # Setelah Terraform provisioning, SSH butuh beberapa detik buat ready.
+      # 30 attempt × 5s = 150s total. Setiap 25% (attempt 8, 15, 23) auto-repair:
+      #   SSH ke Proxmox host → lxc-attach restart sshd + re-check DNS/network.
+      - name: ⏳ Wait for SSH readiness on both CTs (self-healing)
         env:
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
         run: |
+          set +e  # jangan exit on error — kita handle manual
+
+          # Mapping CT IP → Proxmox host IP + VMID
+          declare -A CT_HOST=( ["10.10.10.111"]="10.10.10.201" ["10.10.10.112"]="10.10.10.202" )
+          declare -A CT_VMID=( ["10.10.10.111"]="111" ["10.10.10.112"]="112" )
+
+          SSH_OPTS="-i /tmp/deploy_ssh_key -o StrictHostKeyChecking=no -o ConnectTimeout=3 -o BatchMode=yes"
+
+          for IP in 10.10.10.111 10.10.10.112; do
+            HOST="${CT_HOST[$IP]}"
+            VMID="${CT_VMID[$IP]}"
+            echo "🔍 Checking SSH on $IP (via host $HOST, CT $VMID)..."
+
+            SSH_OK=0
+            NEXT_REPAIR=8
+
+            for i in $(seq 1 30); do
+              ssh $SSH_OPTS "${DEPLOY_USER}@${IP}" "echo ok" >/dev/null 2>&1
+              if [ $? -eq 0 ]; then
+                echo "  attempt $i/30: ✅ SSH ready on $IP"
+                SSH_OK=1
+                break
+              fi
+              echo "  attempt $i/30: SSH not ready"
+
+              # Self-healing di setiap 25% checkpoint
+              if [ $i -ge $NEXT_REPAIR ]; then
+                PCT=$((i * 100 / 30))
+                echo "  ⚠️  ${PCT}% checkpoint — attempting repair via Proxmox host..."
+
+                # 1. Restart sshd via lxc-attach
+                echo "    → Restarting sshd in CT $VMID..."
+                ssh $SSH_OPTS "root@${HOST}" \
+                  "/usr/bin/lxc-attach -n $VMID -- rc-service sshd restart 2>/dev/null || /usr/bin/lxc-attach -n $VMID -- /etc/init.d/sshd restart 2>/dev/null || true"
+
+                # 2. Re-apply DNS (in case resolv.conf got wiped)
+                echo "    → Re-applying DNS in CT $VMID..."
+                ssh $SSH_OPTS "root@${HOST}" \
+                  "/usr/bin/lxc-attach -n $VMID -- sh -c 'echo nameserver 1.1.1.1 > /etc/resolv.conf; echo nameserver 8.8.8.8 >> /etc/resolv.conf'"
+
+                # 3. Verify network interface is up
+                echo "    → Checking network in CT $VMID..."
+                ssh $SSH_OPTS "root@${HOST}" \
+                  "/usr/bin/lxc-attach -n $VMID -- ip addr show eth0 2>&1 | head -5"
+
+                NEXT_REPAIR=$((NEXT_REPAIR + 7))
+                echo "    → Repair done, next checkpoint at attempt $NEXT_REPAIR"
+              fi
+
+              sleep 5
+            done
+
+            if [ $SSH_OK -ne 1 ]; then
+              echo "❌ SSH on $IP not reachable after 150s!"
+              exit 1
+            fi
+          done
+
+          echo "✅ Both CTs SSH ready!"
+
+      # ── Step 4: Deploy ke KEDUA container secara PARALEL (self-healing) ─
+      # Rsync dengan retry loop: 30 attempt × 5s = 150s total.
+      # Setiap 25% (attempt 8, 15, 23) auto-repair: re-create /var/www/html
+      # via Proxmox host + fix permission + restart sshd.
+      - name: 🚀 Rsync to CT web1 & CT web2 (self-healing parallel)
+        env:
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          set +e  # jangan exit on error — kita handle manual
+
+          # Mapping CT IP → Proxmox host IP + VMID
+          declare -A CT_HOST=( ["10.10.10.111"]="10.10.10.201" ["10.10.10.112"]="10.10.10.202" )
+          declare -A CT_VMID=( ["10.10.10.111"]="111" ["10.10.10.112"]="112" )
+
+          SSH_OPTS="-i /tmp/deploy_ssh_key -o StrictHostKeyChecking=no -o BatchMode=yes"
+          RSYNC_OPTS="-avz --delete --no-perms --no-owner --no-group --exclude=.git* --exclude=.github* --exclude=terraform/ -e 'ssh -i /tmp/deploy_ssh_key -o StrictHostKeyChecking=no'"
+
           echo "========================================="
           echo "🔄 Mulai deploy paralel ke kedua CT..."
           echo "   → CT web1: 10.10.10.111"
           echo "   → CT web2: 10.10.10.112"
           echo "========================================="
 
-          # ── Rsync ke CT web1 (background) ──
-          rsync -avz --delete \
-            --exclude '.git*' \
-            --exclude '.github*' \
-            -e "ssh -i /tmp/deploy_ssh_key -o StrictHostKeyChecking=no" \
-            ./ "${DEPLOY_USER}@10.10.10.111:/var/www/html/" \
-            > /tmp/rsync_web1.log 2>&1 &
-          PID_web1=$!
+          # Fungsi: rsync dengan self-healing retry untuk satu CT
+          do_rsync() {
+            local IP=$1
+            local HOST=${CT_HOST[$IP]}
+            local VMID=${CT_VMID[$IP]}
+            local OK=0
+            local NEXT_REPAIR=8
 
-          # ── Rsync ke CT web2 (background) ──
-          rsync -avz --delete \
-            --exclude '.git*' \
-            --exclude '.github*' \
-            -e "ssh -i /tmp/deploy_ssh_key -o StrictHostKeyChecking=no" \
-            ./ "${DEPLOY_USER}@10.10.10.112:/var/www/html/" \
-            > /tmp/rsync_web2.log 2>&1 &
+            for i in $(seq 1 30); do
+              eval rsync $RSYNC_OPTS ./ "${DEPLOY_USER}@${IP}:/var/www/html/" >/tmp/rsync_${VMID}.log 2>&1
+              local EXIT=$?
+              if [ $EXIT -eq 0 ]; then
+                echo "  [$IP] attempt $i/30: ✅ rsync SUCCESS"
+                OK=1
+                break
+              fi
+              echo "  [$IP] attempt $i/30: rsync failed (exit $EXIT)"
+
+              # Self-healing di setiap 25% checkpoint
+              if [ $i -ge $NEXT_REPAIR ]; then
+                local PCT=$((i * 100 / 30))
+                echo "  [$IP] ⚠️  ${PCT}% checkpoint — repairing via Proxmox host $HOST..."
+
+                # 1. Re-create /var/www/html + chmod 777 via lxc-attach
+                echo "    → Fixing /var/www/html permissions..."
+                ssh $SSH_OPTS "root@${HOST}" \
+                  "/usr/bin/lxc-attach -n $VMID -- sh -c 'mkdir -p /var/www/html && chmod -R 777 /var/www/html'"
+
+                # 2. Restart sshd (jika drop setelah rsync load)
+                echo "    → Restarting sshd..."
+                ssh $SSH_OPTS "root@${HOST}" \
+                  "/usr/bin/lxc-attach -n $VMID -- rc-service sshd restart 2>/dev/null || /usr/bin/lxc-attach -n $VMID -- /etc/init.d/sshd restart 2>/dev/null || true"
+
+                # 3. Re-apply DNS
+                echo "    → Re-applying DNS..."
+                ssh $SSH_OPTS "root@${HOST}" \
+                  "/usr/bin/lxc-attach -n $VMID -- sh -c 'echo nameserver 1.1.1.1 > /etc/resolv.conf; echo nameserver 8.8.8.8 >> /etc/resolv.conf'"
+
+                NEXT_REPAIR=$((NEXT_REPAIR + 7))
+                echo "    → Repair done, next checkpoint at attempt $NEXT_REPAIR"
+              fi
+
+              sleep 5
+            done
+
+            if [ $OK -ne 1 ]; then
+              echo "❌ [$IP] rsync failed after 150s! Log:"
+              cat /tmp/rsync_${VMID}.log 2>/dev/null
+              return 1
+            fi
+            return 0
+          }
+
+          # Jalankan rsync ke kedua CT secara PARALEL (background)
+          do_rsync 10.10.10.111 &
+          PID_web1=$!
+          do_rsync 10.10.10.112 &
           PID_web2=$!
 
-          # ── Tunggu keduanya selesai ──
-          echo "⏳ Menunggu rsync selesai..."
+          echo "⏳ Menunggu kedua rsync selesai..."
           wait $PID_web1
           EXIT_web1=$?
           wait $PID_web2
           EXIT_web2=$?
 
-          # ── Tampilkan log ──
+          # Tampilkan log
           echo ""
           echo "=== 📋 Log rsync CT web1 (10.10.10.111) ==="
-          cat /tmp/rsync_web1.log
+          cat /tmp/rsync_111.log 2>/dev/null
           echo ""
           echo "=== 📋 Log rsync CT web2 (10.10.10.112) ==="
-          cat /tmp/rsync_web2.log
+          cat /tmp/rsync_112.log 2>/dev/null
           echo ""
 
-          # ── Cek hasil ──
+          # Cek hasil
+          FAILED=0
           if [ $EXIT_web1 -ne 0 ]; then
             echo "❌ GAGAL deploy ke CT web1 (exit code: $EXIT_web1)"
             FAILED=1
@@ -166,30 +287,29 @@ jobs:
             echo "✅ Sukses deploy ke CT web2"
           fi
 
-          # Bersihkan log sementara
-          rm -f /tmp/rsync_web1.log /tmp/rsync_web2.log
+          rm -f /tmp/rsync_111.log /tmp/rsync_112.log
 
-          if [ "${FAILED:-0}" = "1" ]; then
+          if [ "$FAILED" = "1" ]; then
             echo "🛑 Salah satu deploy gagal, abort!"
             exit 1
           fi
 
           echo "🎉 Kedua deploy sukses!"
 
-      # ── Step 4: Set permission yang benar di kedua CT ───────────────────
-      # www-data harus punya akses baca ke web root supaya nginx/apache
-      # bisa serve file-nya. Kita jalankan chown + chmod via SSH.
+      # ── Step 5: Set permission yang benar di kedua CT ───────────────────
+      # Alpine tidak punya www-data, jadi pakai chmod universal saja.
+      # File readable + executable oleh semua user (nginx/apache/cloudflared).
       - name: 🔒 Fix file permissions on both CTs
         env:
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
         run: |
+          set +e
           echo "🔧 Set permission /var/www/html/ di kedua CT..."
 
           for IP in 10.10.10.111 10.10.10.112; do
             echo "  → $IP ..."
             ssh -i /tmp/deploy_ssh_key -o StrictHostKeyChecking=no \
               "${DEPLOY_USER}@${IP}" "\
-              chown -R www-data:www-data /var/www/html/ && \
               find /var/www/html/ -type d -exec chmod 755 {} \; && \
               find /var/www/html/ -type f -exec chmod 644 {} \; && \
               echo '  ✅ Permission OK'\
@@ -198,7 +318,7 @@ jobs:
 
           echo "🔒 Semua permission sudah benar!"
 
-      # ── Step 5: Cleanup SSH key ─────────────────────────────────────────
+      # ── Step 6: Cleanup SSH key ─────────────────────────────────────────
       # Hapus key sementara biar nggak bocor ke step lain atau runner lain.
       - name: 🧹 Cleanup SSH key
         if: always()

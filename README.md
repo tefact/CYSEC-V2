@@ -45,6 +45,73 @@ Repo ini adalah pipeline CI/CD lengkap yang menggabungkan **Terraform** (Infrast
 
 ---
 
+## 🔄 Pipeline Flow (End-to-End Self-Healing)
+
+Pipeline ini memiliki **3 layer self-healing** yang otomatis memperbaiki masalah jaringan dan permission tanpa intervensi manual:
+
+```
+┌──────────────────── TAHAP 1: Terraform Provisioning ────────────────────┐
+│                                                                          │
+│  CT boot → flush network → static IP + DNS → diagnostic snapshot        │
+│       │                                                                  │
+│       ▼                                                                  │
+│  ┌─ Self-Healing: apk update (150s) ──────────────────────┐             │
+│  │  attempts 1-7:   retry apk update (TCP connectivity)    │             │
+│  │  attempt 8  (25%): 🔧 re-apply DNS + restart networking │             │
+│  │  attempts 9-14:  retry                                  │             │
+│  │  attempt 15 (50%): 🔧 re-apply DNS + restart networking │             │
+│  │  attempts 16-22: retry                                  │             │
+│  │  attempt 23 (75%): 🔧 re-apply DNS + restart networking │             │
+│  │  attempts 24-30: final retry → exit 99 if still failing │             │
+│  └─────────────────────────────────────────────────────────┘             │
+│       │                                                                  │
+│       ▼                                                                  │
+│  OpenRC init → apk add openssh/curl/rsync → SSH config                  │
+│  → mkdir /var/www/html (chmod 777) → cloudflared tunnel service         │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+                                  │
+                                  ▼
+┌──────────────────── TAHAP 2: Deploy (GitHub Actions) ───────────────────┐
+│                                                                          │
+│  SSH key setup + known_hosts (CT + Proxmox hosts)                       │
+│       │                                                                  │
+│       ▼                                                                  │
+│  ┌─ Self-Healing: SSH Readiness (150s) ───────────────────┐             │
+│  │  attempt N: ssh "echo ok" → success? done               │             │
+│  │  at 25%/50%/75%:                                        │             │
+│  │    🔧 lxc-attach restart sshd (via Proxmox host)        │             │
+│  │    🔧 re-apply DNS (/etc/resolv.conf)                   │             │
+│  │    🔧 verify network interface (ip addr show)            │             │
+│  └─────────────────────────────────────────────────────────┘             │
+│       │                                                                  │
+│       ▼                                                                  │
+│  ┌─ Self-Healing: Rsync Parallel (150s) ──────────────────┐             │
+│  │  attempt N: rsync → exit 0? done                        │             │
+│  │  flags: --no-perms --no-owner --no-group (Alpine-safe)  │             │
+│  │  at 25%/50%/75%:                                        │             │
+│  │    🔧 chmod 777 /var/www/html (via lxc-attach)          │             │
+│  │    🔧 restart sshd                                      │             │
+│  │    🔧 re-apply DNS                                      │             │
+│  └─────────────────────────────────────────────────────────┘             │
+│       │                                                                  │
+│       ▼                                                                  │
+│  Fix permissions (chmod 755/644) → cleanup SSH key                      │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+### Mengapa Self-Healing?
+
+| Masalah | Root Cause | Auto-Repair |
+|---------|-----------|-------------|
+| `exit 99` (apk update) | Alpine LXC tidak punya DNS di `/etc/resolv.conf` | Re-apply nameserver 1.1.1.1 + 8.8.8.8 |
+| `exit 23` (rsync) | `/var/www/html` owned by root, deploy user can't write | `chmod -R 777` via `lxc-attach` |
+| SSH not ready | sshd belum start setelah CT boot | `rc-service sshd restart` via Proxmox host |
+| Network race | Alpine template DHCP conflict / interface down | Flush + re-apply static IP + restart networking |
+
+---
+
 ## 📋 Prasyarat (Prerequisites)
 
 Minimal yang harus sudah ada sebelum memulai:
@@ -346,8 +413,9 @@ Cukup pastikan file `terraform/variables.tf` sudah sesuai spesifikasi keinginanm
 3. ✅ Menanam `DEPLOY_PUBLIC_KEY` secara otomatis ke kedua CT
 4. ✅ Set CPU, RAM, disk sesuai `variables.tf`
 5. ✅ Start kedua CT
-6. ✅ **SSH ke Proxmox host → `pct exec` untuk enable SSH + install Cloudflared di dalam CT**
-7. ✅ **Inject tunnel token → True HA otomatis!**
+6. ✅ **Self-healing network setup: flush → static IP → DNS → connectivity check**
+7. ✅ **Install OpenSSH + configure sshd + Cloudflared tunnel via `lxc-attach`**
+8. ✅ **Buat `/var/www/html` (chmod 777) untuk rsync target**
 
 **Kamu langsung skip ke Step 5. Tidak ada kerja manual!** 🎉
 
@@ -355,23 +423,26 @@ Cukup pastikan file `terraform/variables.tf` sudah sesuai spesifikasi keinginanm
 
 ```
 terraform/
-├── main.tf                      ← Provider + resource CT web1 & web2 (pct exec provisioning)
+├── main.tf                      ← Provider + resource CT web1 & web2 (lxc-attach provisioning)
 ├── variables.tf                 ← Spesifikasi (CPU, RAM, disk, IP, node host, template)
 ├── outputs.tf                   ← Output IP & hostname setelah apply
 ├── download-template.tf.example ← (Opsional) Rename ke .tf jika mau auto-download template
 └── .gitignore                   ← Exclude .terraform/, *.tfstate
 ```
 
-> **🔧 Host-Based Provisioning (pct exec)**
-> Alpine Linux di Proxmox **tidak menyalakan SSH secara default**. Daripada pakai hook script (yang butuh `root@pam` dan snippets), kita pakai strategi yang lebih elegan:
+> **🔧 Host-Based Provisioning (lxc-attach)**
+> Alpine Linux di Proxmox **tidak menyalakan SSH secara default**. Daripada pakai hook script (yang butuh `root@pam` dan snippets), kita pakai strategi yang lebih robust:
 >
 > 1. Terraform SSH ke **Proxmox host** (10.10.10.201 / .202)
-> 2. Dari host, jalankan `pct exec <VMID>` untuk:
->    - Enable SSH di dalam Alpine (`PermitRootLogin`, `PubkeyAuthentication`, start sshd)
->    - Install Cloudflare Tunnel
+> 2. Dari host, jalankan `lxc-attach -n <VMID>` untuk:
+>    - Setup network (flush → static IP → DNS `/etc/resolv.conf`)
+>    - Self-healing `apk update` loop (150s, repair at 25%/50%/75%)
+>    - Enable SSH (`PermitRootLogin`, `PubkeyAuthentication`, start sshd)
+>    - Install Cloudflare Tunnel + buat OpenRC init script
+>    - Buat `/var/www/html` dengan `chmod 777`
 > 3. CT sekarang siap menerima rsync di Tahap 2!
 >
-> **Keuntungan:** Bypass 403 hookscript, bypass “no route to host”, dan tidak perlu snippets storage!
+> **Keuntungan:** Bypass 403 hookscript, bypass "no route to host", self-healing network, dan tidak perlu snippets storage!
 
 #### ⚙️ Kustomisasi Spesifikasi CT:
 
@@ -394,7 +465,7 @@ variable "ct_os_template" {
   default = "local:vztmpl/alpine_3.23_amd64_default.tar.xz"
 }
 
-# IP management Proxmox node (untuk SSH + pct exec)
+# IP management Proxmox node (untuk SSH + lxc-attach)
 variable "proxmox_node1_host" {
   default = "10.10.10.201"  # Sesuaikan dengan IP node1 kamu
 }
@@ -474,20 +545,22 @@ git push origin main
 Push ke main
     │
     ▼
-┌─────────────────────────────┐
-│  🏗️ Job 1: provision        │
-│  Terraform Init + Apply     │  ← Buat/pastikan CT ada (idempoten)
-│  working-dir: terraform/    │
-└──────────────┬──────────────┘
+┌─────────────────────────────────────┐
+│  🏗️ Job 1: provision               │
+│  Terraform Init + Apply             │  ← Buat/pastikan CT ada (idempoten)
+│  working-dir: terraform/            │     + self-healing network + SSH + cloudflared
+└──────────────┬──────────────────────┘
                │ (lanjut jika sukses)
                ▼
-┌─────────────────────────────┐
-│  🚀 Job 2: deploy           │
-│  rsync paralel ke:          │
-│  • 10.10.10.111 (web1)      │  ← Deploy file website
-│  • 10.10.10.112 (web2)      │
-│  --exclude '.git*/.github*' │
-└─────────────────────────────┘
+┌─────────────────────────────────────┐
+│  🚀 Job 2: deploy                   │
+│  Step 1: Checkout + SSH key setup   │
+│  Step 2: known_hosts (CT + PVE)     │
+│  Step 3: SSH readiness (self-heal)  │  ← Retry + lxc-attach repair sshd
+│  Step 4: Rsync parallel (self-heal) │  ← Retry + fix perms via Proxmox
+│  Step 5: Fix permissions (chmod)    │
+│  Step 6: Cleanup SSH key            │
+└─────────────────────────────────────┘
 ```
 
 ### 5.3 — Monitor di GitHub:
@@ -502,7 +575,15 @@ Push ke main
    → CT web1: 10.10.10.111
    → CT web2: 10.10.10.112
 =========================================
-⏳ Menunggu rsync selesai...
+⏳ Menunggu kedua rsync selesai...
+  [10.10.10.111] attempt 1/30: ✅ rsync SUCCESS
+  [10.10.10.112] attempt 1/30: ✅ rsync SUCCESS
+
+=== 📋 Log rsync CT web1 (10.10.10.111) ===
+...
+=== 📋 Log rsync CT web2 (10.10.10.112) ===
+...
+
 ✅ Sukses deploy ke CT web1
 ✅ Sukses deploy ke CT web2
 🎉 Kedua deploy sukses!
@@ -545,6 +626,33 @@ Jika salah satu CT mati → Cloudflare otomatis failover ke CT yang masih hidup 
 
 ## 🔧 Troubleshooting
 
+### ❌ Terraform `exit 99` — CT no internet
+
+**Penyebab:** `apk update` gagal karena DNS tidak terkonfigurasi di Alpine LXC.
+
+**Auto-fix sudah built-in:** Self-healing loop akan re-apply `/etc/resolv.conf` (nameserver 1.1.1.1 + 8.8.8.8) dan restart networking di setiap 25% checkpoint (attempt 8, 15, 23).
+
+**Manual fix jika masih gagal:**
+```bash
+# SSH ke Proxmox host, lalu lxc-attach
+ssh root@10.10.10.201
+lxc-attach -n 111
+echo "nameserver 1.1.1.1" > /etc/resolv.conf
+echo "nameserver 8.8.8.8" >> /etc/resolv.conf
+apk update
+```
+
+> Baca diagnostic log di host: `cat /tmp/provision_diag_111.log`
+
+### ❌ Rsync `exit 23` — Partial transfer
+
+**Penyebab:** `/var/www/html` owned by root, deploy user tidak bisa tulis. Atau rsync mencoba set ownership yang tidak diizinkan di Alpine.
+
+**Auto-fix sudah built-in:**
+- Terraform: `chmod -R 777 /var/www/html` saat provisioning
+- Rsync flags: `--no-perms --no-owner --no-group` (skip ownership ops)
+- Self-healing loop: re-chmod 777 via `lxc-attach` di setiap 25% checkpoint
+
 ### ❌ `Job is waiting to be picked up by a runner...`
 
 **Penyebab:** Runner mati atau service berhenti.
@@ -584,25 +692,22 @@ ssh root@10.10.10.111 "chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys"
 
 **Penyebab:** Fingerprint host belum di-known_hosts.
 
-**Solusi:** Workflow sudah pakai `-o StrictHostKeyChecking=no`, jadi jarang terjadi. Kalau masih:
+**Solusi:** Workflow sudah include `ssh-keyscan` untuk semua IP (CT + Proxmox host), plus `-o StrictHostKeyChecking=no`. Kalau masih:
 ```bash
 ssh-keyscan -H 10.10.10.111 >> ~/.ssh/known_hosts
 ssh-keyscan -H 10.10.10.112 >> ~/.ssh/known_hosts
+ssh-keyscan -H 10.10.10.201 >> ~/.ssh/known_hosts
+ssh-keyscan -H 10.10.10.202 >> ~/.ssh/known_hosts
 ```
 
 ### ❌ `rsync: command not found`
 
 **Penyebab:** rsync belum terinstall di CT target.
 
-**Solusi:**
+**Solusi:** Terraform provisioning otomatis install rsync (`apk add rsync`). Manual fix:
 ```bash
-# Untuk Alpine Linux:
 ssh root@10.10.10.111 "apk add rsync"
 ssh root@10.10.10.112 "apk add rsync"
-
-# Untuk Debian/Ubuntu:
-ssh root@10.10.10.111 "apt install -y rsync"
-ssh root@10.10.10.112 "apt install -y rsync"
 ```
 
 ### ❌ Terraform error: `401 Unauthorized`
@@ -630,7 +735,35 @@ ssh root@10.10.10.112 "rc-service cloudflared restart"
 
 ---
 
-## 📁 Struktur File Workflow
+## 📁 Struktur Project Lengkap
+
+```
+CYSEC-V2/
+│
+├── .github/workflows/
+│   └── deploy.yml                  ← GitHub Actions workflow (2-job pipeline)
+│
+├── terraform/
+│   ├── main.tf                     ← Provider + resource CT web1 & web2
+│   │                                 (lxc-attach self-healing provisioning)
+│   ├── variables.tf                ← Spesifikasi CT (CPU, RAM, disk, IP, template)
+│   ├── outputs.tf                  ← Output IP & hostname setelah apply
+│   ├── download-template.tf.example← (Opsional) Auto-download Alpine template
+│   └── .gitignore                  ← Exclude .terraform/, *.tfstate
+│
+├── portfolio (1).html              ← Halaman utama website (HTML)
+├── style.css                       ← Stylesheet utama (3400+ baris)
+├── script.js                       ← JavaScript interaktif (935 baris)
+├── cinematic-intro.css             ← Cinematic intro animation styles
+├── cinematic-intro.js              ← Cinematic intro animation logic
+├── the-night-it-still-young.mp3    ← Audio asset
+│
+└── README.md                       ← Dokumentasi ini (kamu di sini!)
+```
+
+---
+
+## 📋 File Workflow Detail
 
 ```
 .github/workflows/deploy.yml
@@ -643,17 +776,20 @@ ssh root@10.10.10.112 "rc-service cloudflared restart"
 │   ├── 🏗️ Setup Terraform (hashicorp/setup-terraform@v3)
 │   ├── 📦 Terraform Init (working-dir: terraform/)
 │   └── 🚀 Terraform Apply -auto-approve
-│       └── Env: TF_VAR_proxmox_api_token, TF_VAR_ssh_public_key
+│       └── Env: TF_VAR_proxmox_api_token, TF_VAR_ssh_public_key,
+│              TF_VAR_cf_tunnel_token, TF_VAR_ssh_private_key
 │
 └── 🚀 Job 2: deploy (needs: provision)
     ├── 📥 Checkout repository
     ├── 🔑 Setup SSH key (DEPLOY_KEY → /tmp/deploy_ssh_key)
-    ├── 🚀 Rsync paralel ke web1 & web2
-    │   ├── --exclude '.git*' dan '.github*'
-    │   ├── rsync -avz --delete ke 10.10.10.111 (background)
-    │   ├── rsync -avz --delete ke 10.10.10.112 (background)
-    │   └── wait + validasi exit code
-    ├── 🔒 Fix permissions (www-data, 755/644)
+    │   └── known_hosts: CT (111, 112) + Proxmox host (201, 202)
+    ├── ⏳ SSH Readiness (self-healing, 30×5s = 150s)
+    │   └── Repair: lxc-attach restart sshd + DNS + network check
+    ├── 🚀 Rsync Parallel (self-healing, 30×5s = 150s)
+    │   ├── --no-perms --no-owner --no-group (Alpine-safe)
+    │   ├── --exclude .git* .github* terraform/
+    │   └── Repair: chmod 777 + restart sshd + re-apply DNS
+    ├── 🔒 Fix permissions (chmod 755/644, no www-data)
     └── 🧹 Cleanup SSH key (always run)
 ```
 

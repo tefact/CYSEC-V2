@@ -142,6 +142,9 @@ resource "proxmox_virtual_environment_container" "web1" {
       "/usr/bin/lxc-attach -n 111 -- rc-update add sshd default || true",
       "/usr/bin/lxc-attach -n 111 -- rc-service sshd restart || true",
 
+      # 5.5. Buat web root directory + chmod 777 (rsync user perlu tulis)
+      "/usr/bin/lxc-attach -n 111 -- sh -c 'mkdir -p /var/www/html && chmod -R 777 /var/www/html'",
+
       # 6. Download cloudflared binary
       "/usr/bin/lxc-attach -n 111 -- curl -L --output /usr/local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64",
       "/usr/bin/lxc-attach -n 111 -- chmod +x /usr/local/bin/cloudflared",
@@ -305,6 +308,9 @@ resource "proxmox_virtual_environment_container" "web2" {
       "/usr/bin/lxc-attach -n 112 -- sh -c 'sed -i \"s/^#*PubkeyAuthentication.*/PubkeyAuthentication yes/\" /etc/ssh/sshd_config'",
       "/usr/bin/lxc-attach -n 112 -- rc-update add sshd default || true",
       "/usr/bin/lxc-attach -n 112 -- rc-service sshd restart || true",
+
+      # 5.5. Buat web root directory + chmod 777 (rsync user perlu tulis)
+      "/usr/bin/lxc-attach -n 112 -- sh -c 'mkdir -p /var/www/html && chmod -R 777 /var/www/html'",
 
       # 6. Download cloudflared binary
       "/usr/bin/lxc-attach -n 112 -- curl -L --output /usr/local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64",
