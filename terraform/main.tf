@@ -67,6 +67,11 @@ resource "proxmox_virtual_environment_container" "web1" {
     nesting = true
   }
 
+  # Force recreate CTs when SSH key changes (GitHub Secret update)
+  lifecycle {
+    replace_triggered_by = [var.ssh_public_key]
+  }
+
   # ── Host-Based Provisioning: SSH ke Proxmox host → lxc-attach ke dalam CT ──
   # lxc-attach bypass bug Perl pct exec yang hang 100% CPU di Alpine unprivileged.
   provisioner "remote-exec" {
