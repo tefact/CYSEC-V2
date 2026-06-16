@@ -74,10 +74,28 @@ resource "proxmox_virtual_environment_container" "web1" {
       # 1. Tunggu CT benar-benar running
       "until pct status 111 | grep -q 'running'; do sleep 2; done",
 
-      # 2. Tunggu jaringan siap (bounded: 30 x 2s = 60s, tanpa -W agar BusyBox-safe)
-      "echo '⏳ Memeriksa koneksi internet di dalam CT 111 (maks 60s)...'",
-      "CONNECTED=0; for i in $(seq 1 30); do if /usr/bin/lxc-attach -n 111 -- ping -c 1 1.1.1.1 >/dev/null 2>&1; then CONNECTED=1; break; fi; echo '  attempt '$$i'/30...'; sleep 2; done",
-      "[ $CONNECTED -eq 1 ] && echo '✅ Internet ready!' || { echo '❌ CT 111 tidak punya akses internet!'; exit 99; }",
+      # 1.5. Setup jaringan manual di dalam CT (Alpine tidak auto-apply ip_config dari Proxmox API)
+      "sleep 5",
+      "/usr/bin/lxc-attach -n 111 -- ip link set eth0 up",
+      "/usr/bin/lxc-attach -n 111 -- ip addr add 10.10.10.111/24 dev eth0 || true",
+      "/usr/bin/lxc-attach -n 111 -- ip route add default via 10.10.10.1 || true",
+      "echo '📡 Network interface configured: eth0 = 10.10.10.111/24, gw = 10.10.10.1'",
+
+      # 1.6. Tulis config jaringan persisten supaya survive setelah restart networking
+      "echo 'auto lo' > /tmp/net_111",
+      "echo 'iface lo inet loopback' >> /tmp/net_111",
+      "echo '' >> /tmp/net_111",
+      "echo 'auto eth0' >> /tmp/net_111",
+      "echo 'iface eth0 inet static' >> /tmp/net_111",
+      "echo '    address 10.10.10.111/24' >> /tmp/net_111",
+      "echo '    gateway 10.10.10.1' >> /tmp/net_111",
+      "pct push 111 /tmp/net_111 /etc/network/interfaces",
+      "rm -f /tmp/net_111",
+
+      # 2. Tunggu gateway reachable (bounded: 30 x 2s = 60s, tanpa -W agar BusyBox-safe)
+      "echo '⏳ Memeriksa koneksi gateway CT 111 (maks 60s)...'",
+      "CONNECTED=0; for i in $(seq 1 30); do if /usr/bin/lxc-attach -n 111 -- ping -c 1 10.10.10.1 >/dev/null 2>&1; then CONNECTED=1; break; fi; echo '  attempt '$$i'/30...'; sleep 2; done",
+      "[ $CONNECTED -eq 1 ] && echo '✅ Gateway reachable!' || { echo '❌ CT 111 gateway tidak reachable!'; exit 99; }",
 
       # 3. Inisialisasi OpenRC (fix 'softlevel not set')
       "/usr/bin/lxc-attach -n 111 -- sh -c 'mkdir -p /run/openrc && touch /run/openrc/softlevel'",
@@ -188,10 +206,28 @@ resource "proxmox_virtual_environment_container" "web2" {
       # 1. Tunggu CT benar-benar running
       "until pct status 112 | grep -q 'running'; do sleep 2; done",
 
-      # 2. Tunggu jaringan siap (bounded: 30 x 2s = 60s, tanpa -W agar BusyBox-safe)
-      "echo '⏳ Memeriksa koneksi internet di dalam CT 112 (maks 60s)...'",
-      "CONNECTED=0; for i in $(seq 1 30); do if /usr/bin/lxc-attach -n 112 -- ping -c 1 1.1.1.1 >/dev/null 2>&1; then CONNECTED=1; break; fi; echo '  attempt '$$i'/30...'; sleep 2; done",
-      "[ $CONNECTED -eq 1 ] && echo '✅ Internet ready!' || { echo '❌ CT 112 tidak punya akses internet!'; exit 99; }",
+      # 1.5. Setup jaringan manual di dalam CT (Alpine tidak auto-apply ip_config dari Proxmox API)
+      "sleep 5",
+      "/usr/bin/lxc-attach -n 112 -- ip link set eth0 up",
+      "/usr/bin/lxc-attach -n 112 -- ip addr add 10.10.10.112/24 dev eth0 || true",
+      "/usr/bin/lxc-attach -n 112 -- ip route add default via 10.10.10.1 || true",
+      "echo '📡 Network interface configured: eth0 = 10.10.10.112/24, gw = 10.10.10.1'",
+
+      # 1.6. Tulis config jaringan persisten supaya survive setelah restart networking
+      "echo 'auto lo' > /tmp/net_112",
+      "echo 'iface lo inet loopback' >> /tmp/net_112",
+      "echo '' >> /tmp/net_112",
+      "echo 'auto eth0' >> /tmp/net_112",
+      "echo 'iface eth0 inet static' >> /tmp/net_112",
+      "echo '    address 10.10.10.112/24' >> /tmp/net_112",
+      "echo '    gateway 10.10.10.1' >> /tmp/net_112",
+      "pct push 112 /tmp/net_112 /etc/network/interfaces",
+      "rm -f /tmp/net_112",
+
+      # 2. Tunggu gateway reachable (bounded: 30 x 2s = 60s, tanpa -W agar BusyBox-safe)
+      "echo '⏳ Memeriksa koneksi gateway CT 112 (maks 60s)...'",
+      "CONNECTED=0; for i in $(seq 1 30); do if /usr/bin/lxc-attach -n 112 -- ping -c 1 10.10.10.1 >/dev/null 2>&1; then CONNECTED=1; break; fi; echo '  attempt '$$i'/30...'; sleep 2; done",
+      "[ $CONNECTED -eq 1 ] && echo '✅ Gateway reachable!' || { echo '❌ CT 112 gateway tidak reachable!'; exit 99; }",
 
       # 3. Inisialisasi OpenRC (fix 'softlevel not set')
       "/usr/bin/lxc-attach -n 112 -- sh -c 'mkdir -p /run/openrc && touch /run/openrc/softlevel'",
