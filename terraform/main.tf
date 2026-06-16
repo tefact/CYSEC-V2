@@ -251,6 +251,11 @@ resource "proxmox_virtual_environment_container" "web2" {
     nesting = true
   }
 
+  # Force recreate CTs when SSH key changes (GitHub Secret update)
+  lifecycle {
+    replace_triggered_by = [var.ssh_public_key]
+  }
+
   # ── Host-Based Provisioning: SSH ke Proxmox host → lxc-attach ke dalam CT ──
   provisioner "remote-exec" {
     inline = [
