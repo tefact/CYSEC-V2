@@ -88,9 +88,14 @@ resource "proxmox_virtual_environment_container" "web1" {
       "echo 'iface eth0 inet static' >> /tmp/net_111",
       "echo '    address 10.10.10.111/24' >> /tmp/net_111",
       "echo '    gateway 10.10.10.1' >> /tmp/net_111",
+      "echo '    dns-nameservers 1.1.1.1 8.8.8.8' >> /tmp/net_111",
       "pct push 111 /tmp/net_111 /etc/network/interfaces",
       "rm -f /tmp/net_111",
       "/usr/bin/lxc-attach -n 111 -- sh -c 'rc-service networking restart 2>/dev/null || /etc/init.d/networking restart 2>/dev/null || true'",
+
+      # 1.65. Setup DNS (tanpa nameserver, apk update gagal resolve repo)
+      "/usr/bin/lxc-attach -n 111 -- sh -c 'echo nameserver 1.1.1.1 > /etc/resolv.conf; echo nameserver 8.8.8.8 >> /etc/resolv.conf'",
+      "echo '🔤 DNS configured: 1.1.1.1, 8.8.8.8'",
 
       # 1.7. Diagnostic snapshot ke host (bisa dibaca via SSH jika pipeline gagal)
       "sh -c 'echo \"=== Provision diagnostic CT 111 ===\" > /tmp/provision_diag_111.log'",
@@ -100,11 +105,30 @@ resource "proxmox_virtual_environment_container" "web1" {
       "/usr/bin/lxc-attach -n 111 -- ip route >> /tmp/provision_diag_111.log 2>&1 || true",
       "sh -c 'echo \"--- ping gateway ---\" >> /tmp/provision_diag_111.log'",
       "/usr/bin/lxc-attach -n 111 -- ping -c 2 10.10.10.1 >> /tmp/provision_diag_111.log 2>&1 || true",
+      "sh -c 'echo \"--- DNS resolve test ---\" >> /tmp/provision_diag_111.log'",
+      "/usr/bin/lxc-attach -n 111 -- sh -c 'cat /etc/resolv.conf; nslookup dl-cdn.alpinelinux.org 2>&1 || true' >> /tmp/provision_diag_111.log 2>&1 || true",
 
-      # 2. Tunggu koneksi internet via TCP (ICMP ping tidak reliable — router bisa drop ICMP)
-      "echo '⏳ Verifying internet connectivity via apk update (TCP, maks 60s)...'",
-      "NET_OK=0; for i in $(seq 1 15); do echo \"  attempt $$i/15...\"; if sh -c '/usr/bin/lxc-attach -n 111 -- apk update >/dev/null 2>&1'; then NET_OK=1; break; fi; sleep 4; done",
-      "[ $$NET_OK -eq 1 ] && echo '✅ Internet connected (TCP verified)!' || { echo '❌ CT 111 no internet! Check /tmp/provision_diag_111.log on host.'; exit 99; }",
+      # 2. Self-healing internet check: tulis script ke host, lalu execute
+      #    30 attempt × 5s = 150s total. Setiap 25% (attempt 8, 15, 23) auto-repair DNS+networking.
+      "echo '#!/bin/sh' > /tmp/net_check_111.sh",
+      "echo 'CT=111; ATTEMPTS=30; INTERVAL=5; OK=0; NEXT_REPAIR=8' >> /tmp/net_check_111.sh",
+      "echo 'echo \"⏳ Verifying internet via apk update (TCP, max 150s)...\"' >> /tmp/net_check_111.sh",
+      "echo 'for i in $(seq 1 $ATTEMPTS); do' >> /tmp/net_check_111.sh",
+      "echo '  if /usr/bin/lxc-attach -n $CT -- apk update >/dev/null 2>&1; then OK=1; echo \"  attempt $i/$ATTEMPTS: SUCCESS\"; break; fi' >> /tmp/net_check_111.sh",
+      "echo '  echo \"  attempt $i/$ATTEMPTS: failed\"' >> /tmp/net_check_111.sh",
+      "echo '  if [ $i -ge $NEXT_REPAIR ]; then' >> /tmp/net_check_111.sh",
+      "echo '    echo \"  25% checkpoint ($i/$ATTEMPTS) - re-applying DNS + restarting networking...\"' >> /tmp/net_check_111.sh",
+      "echo '    /usr/bin/lxc-attach -n $CT -- sh -c \"echo nameserver 1.1.1.1 > /etc/resolv.conf; echo nameserver 8.8.8.8 >> /etc/resolv.conf\"' >> /tmp/net_check_111.sh",
+      "echo '    /usr/bin/lxc-attach -n $CT -- sh -c \"rc-service networking restart 2>/dev/null || /etc/init.d/networking restart 2>/dev/null || true\"' >> /tmp/net_check_111.sh",
+      "echo '    NEXT_REPAIR=$((NEXT_REPAIR + 7))' >> /tmp/net_check_111.sh",
+      "echo '  fi' >> /tmp/net_check_111.sh",
+      "echo '  sleep $INTERVAL' >> /tmp/net_check_111.sh",
+      "echo 'done' >> /tmp/net_check_111.sh",
+      "echo 'if [ $OK -ne 1 ]; then echo \"❌ CT $CT no internet after 150s! Check /tmp/provision_diag_$CT.log\"; exit 99; fi' >> /tmp/net_check_111.sh",
+      "echo 'echo \"✅ CT $CT internet connected (TCP verified)!\"' >> /tmp/net_check_111.sh",
+      "chmod +x /tmp/net_check_111.sh",
+      "/bin/sh /tmp/net_check_111.sh",
+      "rm -f /tmp/net_check_111.sh",
 
       # 3. Inisialisasi OpenRC (fix 'softlevel not set')
       "/usr/bin/lxc-attach -n 111 -- sh -c 'mkdir -p /run/openrc && touch /run/openrc/softlevel'",
@@ -228,9 +252,14 @@ resource "proxmox_virtual_environment_container" "web2" {
       "echo 'iface eth0 inet static' >> /tmp/net_112",
       "echo '    address 10.10.10.112/24' >> /tmp/net_112",
       "echo '    gateway 10.10.10.1' >> /tmp/net_112",
+      "echo '    dns-nameservers 1.1.1.1 8.8.8.8' >> /tmp/net_112",
       "pct push 112 /tmp/net_112 /etc/network/interfaces",
       "rm -f /tmp/net_112",
       "/usr/bin/lxc-attach -n 112 -- sh -c 'rc-service networking restart 2>/dev/null || /etc/init.d/networking restart 2>/dev/null || true'",
+
+      # 1.65. Setup DNS (tanpa nameserver, apk update gagal resolve repo)
+      "/usr/bin/lxc-attach -n 112 -- sh -c 'echo nameserver 1.1.1.1 > /etc/resolv.conf; echo nameserver 8.8.8.8 >> /etc/resolv.conf'",
+      "echo '🔤 DNS configured: 1.1.1.1, 8.8.8.8'",
 
       # 1.7. Diagnostic snapshot ke host (bisa dibaca via SSH jika pipeline gagal)
       "sh -c 'echo \"=== Provision diagnostic CT 112 ===\" > /tmp/provision_diag_112.log'",
@@ -240,11 +269,30 @@ resource "proxmox_virtual_environment_container" "web2" {
       "/usr/bin/lxc-attach -n 112 -- ip route >> /tmp/provision_diag_112.log 2>&1 || true",
       "sh -c 'echo \"--- ping gateway ---\" >> /tmp/provision_diag_112.log'",
       "/usr/bin/lxc-attach -n 112 -- ping -c 2 10.10.10.1 >> /tmp/provision_diag_112.log 2>&1 || true",
+      "sh -c 'echo \"--- DNS resolve test ---\" >> /tmp/provision_diag_112.log'",
+      "/usr/bin/lxc-attach -n 112 -- sh -c 'cat /etc/resolv.conf; nslookup dl-cdn.alpinelinux.org 2>&1 || true' >> /tmp/provision_diag_112.log 2>&1 || true",
 
-      # 2. Tunggu koneksi internet via TCP (ICMP ping tidak reliable — router bisa drop ICMP)
-      "echo '⏳ Verifying internet connectivity via apk update (TCP, maks 60s)...'",
-      "NET_OK=0; for i in $(seq 1 15); do echo \"  attempt $$i/15...\"; if sh -c '/usr/bin/lxc-attach -n 112 -- apk update >/dev/null 2>&1'; then NET_OK=1; break; fi; sleep 4; done",
-      "[ $$NET_OK -eq 1 ] && echo '✅ Internet connected (TCP verified)!' || { echo '❌ CT 112 no internet! Check /tmp/provision_diag_112.log on host.'; exit 99; }",
+      # 2. Self-healing internet check: tulis script ke host, lalu execute
+      #    30 attempt × 5s = 150s total. Setiap 25% (attempt 8, 15, 23) auto-repair DNS+networking.
+      "echo '#!/bin/sh' > /tmp/net_check_112.sh",
+      "echo 'CT=112; ATTEMPTS=30; INTERVAL=5; OK=0; NEXT_REPAIR=8' >> /tmp/net_check_112.sh",
+      "echo 'echo \"⏳ Verifying internet via apk update (TCP, max 150s)...\"' >> /tmp/net_check_112.sh",
+      "echo 'for i in $(seq 1 $ATTEMPTS); do' >> /tmp/net_check_112.sh",
+      "echo '  if /usr/bin/lxc-attach -n $CT -- apk update >/dev/null 2>&1; then OK=1; echo \"  attempt $i/$ATTEMPTS: SUCCESS\"; break; fi' >> /tmp/net_check_112.sh",
+      "echo '  echo \"  attempt $i/$ATTEMPTS: failed\"' >> /tmp/net_check_112.sh",
+      "echo '  if [ $i -ge $NEXT_REPAIR ]; then' >> /tmp/net_check_112.sh",
+      "echo '    echo \"  25% checkpoint ($i/$ATTEMPTS) - re-applying DNS + restarting networking...\"' >> /tmp/net_check_112.sh",
+      "echo '    /usr/bin/lxc-attach -n $CT -- sh -c \"echo nameserver 1.1.1.1 > /etc/resolv.conf; echo nameserver 8.8.8.8 >> /etc/resolv.conf\"' >> /tmp/net_check_112.sh",
+      "echo '    /usr/bin/lxc-attach -n $CT -- sh -c \"rc-service networking restart 2>/dev/null || /etc/init.d/networking restart 2>/dev/null || true\"' >> /tmp/net_check_112.sh",
+      "echo '    NEXT_REPAIR=$((NEXT_REPAIR + 7))' >> /tmp/net_check_112.sh",
+      "echo '  fi' >> /tmp/net_check_112.sh",
+      "echo '  sleep $INTERVAL' >> /tmp/net_check_112.sh",
+      "echo 'done' >> /tmp/net_check_112.sh",
+      "echo 'if [ $OK -ne 1 ]; then echo \"❌ CT $CT no internet after 150s! Check /tmp/provision_diag_$CT.log\"; exit 99; fi' >> /tmp/net_check_112.sh",
+      "echo 'echo \"✅ CT $CT internet connected (TCP verified)!\"' >> /tmp/net_check_112.sh",
+      "chmod +x /tmp/net_check_112.sh",
+      "/bin/sh /tmp/net_check_112.sh",
+      "rm -f /tmp/net_check_112.sh",
 
       # 3. Inisialisasi OpenRC (fix 'softlevel not set')
       "/usr/bin/lxc-attach -n 112 -- sh -c 'mkdir -p /run/openrc && touch /run/openrc/softlevel'",
