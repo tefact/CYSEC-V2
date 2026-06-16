@@ -74,31 +74,48 @@ resource "proxmox_virtual_environment_container" "web1" {
       # 1. Tunggu CT benar-benar running
       "until pct status 111 | grep -q 'running'; do sleep 2; done",
 
-      # 2. Tunggu jaringan siap (bounded: maks 15 x 3s = 45s, lalu fail fast)
-      "echo '⏳ Menunggu koneksi internet di dalam CT (maks 45s)...'",
-      "CONNECTED=0; for i in $(seq 1 15); do if lxc-attach -n 111 -- ping -c 1 -W 2 1.1.1.1 >/dev/null 2>&1; then CONNECTED=1; break; fi; echo \"  attempt $$i/15...\"; sleep 3; done",
-      "[ $CONNECTED -eq 1 ] && echo '✅ Internet ready!' || { echo '❌ CT tidak punya akses internet!'; exit 1; }",
+      # 2. Tunggu jaringan siap (bounded: maks 10 x 3s = 30s, lalu fail fast)
+      "echo '⏳ Memeriksa koneksi internet di dalam CT...'",
+      "CONNECTED=0; for i in $(seq 1 10); do if lxc-attach -n 111 -- ping -c 1 -W 2 1.1.1.1 >/dev/null 2>&1; then CONNECTED=1; break; fi; sleep 2; done",
+      "[ $CONNECTED -eq 1 ] || { echo '❌ CT tidak punya akses internet!'; exit 99; }",
 
-      # 3. Install semua paket (openssh DULUAN supaya sshd_config ada)
-      "lxc-attach -n 111 -- apk update",
+      # 3. FIX: Inisialisasi OpenRC supaya rc-service/rc-update tidak crash 'softlevel not set'
+      "lxc-attach -n 111 -- sh -c 'mkdir -p /run/openrc && touch /run/openrc/softlevel'",
+
+      # 4. Install paket dasar (openssh DULUAN supaya sshd_config ada)
+      "lxc-attach -n 111 -- apk update || true",
       "lxc-attach -n 111 -- apk add --no-cache openssh curl libc6-compat rsync openrc",
 
-      # 4. Konfigurasi & start SSH (file dijamin ada setelah apk add openssh)
+      # 5. Konfigurasi & start SSH
       "lxc-attach -n 111 -- sh -c 'sed -i \"s/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/\" /etc/ssh/sshd_config'",
       "lxc-attach -n 111 -- sh -c 'sed -i \"s/^#*PubkeyAuthentication.*/PubkeyAuthentication yes/\" /etc/ssh/sshd_config'",
-      "lxc-attach -n 111 -- rc-update add sshd default",
-      "lxc-attach -n 111 -- rc-service sshd start",
-      "sleep 3",
+      "lxc-attach -n 111 -- rc-update add sshd default || true",
+      "lxc-attach -n 111 -- rc-service sshd restart || true",
 
-      # 5. Download & install Cloudflare Tunnel
+      # 6. Download cloudflared binary
       "lxc-attach -n 111 -- curl -L --output /usr/local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64",
       "lxc-attach -n 111 -- chmod +x /usr/local/bin/cloudflared",
 
-      # 6. Buat OpenRC init script untuk cloudflared (Alpine tidak pakai systemd)
-      "lxc-attach -n 111 -- sh -c 'cat > /etc/init.d/cloudflared << INITEOF\n#!/sbin/openrc-run\nname=\"cloudflared\"\ndescription=\"Cloudflare Tunnel\"\ncommand=\"/usr/local/bin/cloudflared\"\ncommand_args=\"tunnel --no-autoupdate run --token ${var.cf_tunnel_token}\"\ncommand_background=\"true\"\npidfile=\"/run/cloudflared.pid\"\ndepend() { need net; }\nINITEOF'",
+      # 7. Buat OpenRC init script di HOST dulu (hindari escaping issues di lxc-attach)
+      "echo '#!/sbin/openrc-run' > /tmp/cf_init_111",
+      "echo 'name=\"cloudflared\"' >> /tmp/cf_init_111",
+      "echo 'description=\"Cloudflare Tunnel\"' >> /tmp/cf_init_111",
+      "echo 'command=\"/usr/local/bin/cloudflared\"' >> /tmp/cf_init_111",
+      "echo 'command_args=\"tunnel --no-autoupdate run --token ${var.cf_tunnel_token}\"' >> /tmp/cf_init_111",
+      "echo 'command_background=\"true\"' >> /tmp/cf_init_111",
+      "echo 'pidfile=\"/run/cloudflared.pid\"' >> /tmp/cf_init_111",
+      "echo 'depend() {' >> /tmp/cf_init_111",
+      "echo '    need net' >> /tmp/cf_init_111",
+      "echo '}' >> /tmp/cf_init_111",
+
+      # 8. Push init script dari host ke dalam CT via pct push
+      "pct push 111 /tmp/cf_init_111 /etc/init.d/cloudflared",
+      "rm -f /tmp/cf_init_111",
+
+      # 9. Start cloudflared service
       "lxc-attach -n 111 -- chmod +x /etc/init.d/cloudflared",
-      "lxc-attach -n 111 -- rc-update add cloudflared default",
-      "lxc-attach -n 111 -- rc-service cloudflared start"
+      "lxc-attach -n 111 -- rc-update add cloudflared default || true",
+      "lxc-attach -n 111 -- rc-service cloudflared restart || true"
     ]
   }
 
@@ -171,31 +188,48 @@ resource "proxmox_virtual_environment_container" "web2" {
       # 1. Tunggu CT benar-benar running
       "until pct status 112 | grep -q 'running'; do sleep 2; done",
 
-      # 2. Tunggu jaringan siap (bounded: maks 15 x 3s = 45s, lalu fail fast)
-      "echo '⏳ Menunggu koneksi internet di dalam CT (maks 45s)...'",
-      "CONNECTED=0; for i in $(seq 1 15); do if lxc-attach -n 112 -- ping -c 1 -W 2 1.1.1.1 >/dev/null 2>&1; then CONNECTED=1; break; fi; echo \"  attempt $$i/15...\"; sleep 3; done",
-      "[ $CONNECTED -eq 1 ] && echo '✅ Internet ready!' || { echo '❌ CT tidak punya akses internet!'; exit 1; }",
+      # 2. Tunggu jaringan siap (bounded: maks 10 x 3s = 30s, lalu fail fast)
+      "echo '⏳ Memeriksa koneksi internet di dalam CT...'",
+      "CONNECTED=0; for i in $(seq 1 10); do if lxc-attach -n 112 -- ping -c 1 -W 2 1.1.1.1 >/dev/null 2>&1; then CONNECTED=1; break; fi; sleep 2; done",
+      "[ $CONNECTED -eq 1 ] || { echo '❌ CT tidak punya akses internet!'; exit 99; }",
 
-      # 3. Install semua paket (openssh DULUAN supaya sshd_config ada)
-      "lxc-attach -n 112 -- apk update",
+      # 3. FIX: Inisialisasi OpenRC supaya rc-service/rc-update tidak crash 'softlevel not set'
+      "lxc-attach -n 112 -- sh -c 'mkdir -p /run/openrc && touch /run/openrc/softlevel'",
+
+      # 4. Install paket dasar (openssh DULUAN supaya sshd_config ada)
+      "lxc-attach -n 112 -- apk update || true",
       "lxc-attach -n 112 -- apk add --no-cache openssh curl libc6-compat rsync openrc",
 
-      # 4. Konfigurasi & start SSH (file dijamin ada setelah apk add openssh)
+      # 5. Konfigurasi & start SSH
       "lxc-attach -n 112 -- sh -c 'sed -i \"s/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/\" /etc/ssh/sshd_config'",
       "lxc-attach -n 112 -- sh -c 'sed -i \"s/^#*PubkeyAuthentication.*/PubkeyAuthentication yes/\" /etc/ssh/sshd_config'",
-      "lxc-attach -n 112 -- rc-update add sshd default",
-      "lxc-attach -n 112 -- rc-service sshd start",
-      "sleep 3",
+      "lxc-attach -n 112 -- rc-update add sshd default || true",
+      "lxc-attach -n 112 -- rc-service sshd restart || true",
 
-      # 5. Download & install Cloudflare Tunnel
+      # 6. Download cloudflared binary
       "lxc-attach -n 112 -- curl -L --output /usr/local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64",
       "lxc-attach -n 112 -- chmod +x /usr/local/bin/cloudflared",
 
-      # 6. Buat OpenRC init script untuk cloudflared (Alpine tidak pakai systemd)
-      "lxc-attach -n 112 -- sh -c 'cat > /etc/init.d/cloudflared << INITEOF\n#!/sbin/openrc-run\nname=\"cloudflared\"\ndescription=\"Cloudflare Tunnel\"\ncommand=\"/usr/local/bin/cloudflared\"\ncommand_args=\"tunnel --no-autoupdate run --token ${var.cf_tunnel_token}\"\ncommand_background=\"true\"\npidfile=\"/run/cloudflared.pid\"\ndepend() { need net; }\nINITEOF'",
+      # 7. Buat OpenRC init script di HOST dulu (hindari escaping issues di lxc-attach)
+      "echo '#!/sbin/openrc-run' > /tmp/cf_init_112",
+      "echo 'name=\"cloudflared\"' >> /tmp/cf_init_112",
+      "echo 'description=\"Cloudflare Tunnel\"' >> /tmp/cf_init_112",
+      "echo 'command=\"/usr/local/bin/cloudflared\"' >> /tmp/cf_init_112",
+      "echo 'command_args=\"tunnel --no-autoupdate run --token ${var.cf_tunnel_token}\"' >> /tmp/cf_init_112",
+      "echo 'command_background=\"true\"' >> /tmp/cf_init_112",
+      "echo 'pidfile=\"/run/cloudflared.pid\"' >> /tmp/cf_init_112",
+      "echo 'depend() {' >> /tmp/cf_init_112",
+      "echo '    need net' >> /tmp/cf_init_112",
+      "echo '}' >> /tmp/cf_init_112",
+
+      # 8. Push init script dari host ke dalam CT via pct push
+      "pct push 112 /tmp/cf_init_112 /etc/init.d/cloudflared",
+      "rm -f /tmp/cf_init_112",
+
+      # 9. Start cloudflared service
       "lxc-attach -n 112 -- chmod +x /etc/init.d/cloudflared",
-      "lxc-attach -n 112 -- rc-update add cloudflared default",
-      "lxc-attach -n 112 -- rc-service cloudflared start"
+      "lxc-attach -n 112 -- rc-update add cloudflared default || true",
+      "lxc-attach -n 112 -- rc-service cloudflared restart || true"
     ]
   }
 
