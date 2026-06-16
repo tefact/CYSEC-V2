@@ -68,22 +68,29 @@ resource "proxmox_virtual_environment_container" "web1" {
   }
 
   # ── Host-Based Provisioning: SSH ke Proxmox host → pct exec ke dalam CT ──
-  # Bypass 403 hookscript & "no route to host" — proven reliable!
+  # Bypass 403 hookscript & "no route to host" — bulletproof edition!
   provisioner "remote-exec" {
     inline = [
       # 1. Tunggu CT benar-benar running
       "until pct status 111 | grep -q 'running'; do sleep 2; done",
-      "sleep 5",
 
-      # 2. Enable SSH di dalam Alpine CT (via pct exec dari host)
+      # 2. Tunggu jaringan siap (ping Cloudflare DNS)
+      "echo '⏳ Menunggu koneksi internet di dalam CT...'",
+      "until pct exec 111 -- ping -c 1 -W 2 1.1.1.1 >/dev/null 2>&1; do sleep 2; done",
+      "echo '✅ Internet ready! Mulai instalasi...'",
+
+      # 3. Install semua paket sekaligus (openssh DULUAN supaya sshd_config ada)
+      "pct exec 111 -- apk update",
+      "pct exec 111 -- apk add --no-cache openssh curl libc6-compat rsync",
+
+      # 4. Konfigurasi SSH (file sekarang dijamin ada)
       "pct exec 111 -- sh -c 'sed -i \"s/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/\" /etc/ssh/sshd_config'",
       "pct exec 111 -- sh -c 'sed -i \"s/^#*PubkeyAuthentication.*/PubkeyAuthentication yes/\" /etc/ssh/sshd_config'",
-      "pct exec 111 -- sh -c 'rc-update add sshd default && rc-service sshd start'",
+      "pct exec 111 -- rc-update add sshd default",
+      "pct exec 111 -- rc-service sshd start",
       "sleep 3",
 
-      # 3. Install Cloudflare Tunnel (Distributed Replica)
-      "pct exec 111 -- apk update",
-      "pct exec 111 -- apk add curl openrc libc6-compat",
+      # 5. Install Cloudflare Tunnel (Distributed Replica)
       "pct exec 111 -- curl -L --output /usr/local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64",
       "pct exec 111 -- chmod +x /usr/local/bin/cloudflared",
       "pct exec 111 -- cloudflared service install ${var.cf_tunnel_token}",
@@ -159,17 +166,24 @@ resource "proxmox_virtual_environment_container" "web2" {
     inline = [
       # 1. Tunggu CT benar-benar running
       "until pct status 112 | grep -q 'running'; do sleep 2; done",
-      "sleep 5",
 
-      # 2. Enable SSH di dalam Alpine CT (via pct exec dari host)
+      # 2. Tunggu jaringan siap (ping Cloudflare DNS)
+      "echo '⏳ Menunggu koneksi internet di dalam CT...'",
+      "until pct exec 112 -- ping -c 1 -W 2 1.1.1.1 >/dev/null 2>&1; do sleep 2; done",
+      "echo '✅ Internet ready! Mulai instalasi...'",
+
+      # 3. Install semua paket sekaligus (openssh DULUAN supaya sshd_config ada)
+      "pct exec 112 -- apk update",
+      "pct exec 112 -- apk add --no-cache openssh curl libc6-compat rsync",
+
+      # 4. Konfigurasi SSH (file sekarang dijamin ada)
       "pct exec 112 -- sh -c 'sed -i \"s/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/\" /etc/ssh/sshd_config'",
       "pct exec 112 -- sh -c 'sed -i \"s/^#*PubkeyAuthentication.*/PubkeyAuthentication yes/\" /etc/ssh/sshd_config'",
-      "pct exec 112 -- sh -c 'rc-update add sshd default && rc-service sshd start'",
+      "pct exec 112 -- rc-update add sshd default",
+      "pct exec 112 -- rc-service sshd start",
       "sleep 3",
 
-      # 3. Install Cloudflare Tunnel (Distributed Replica)
-      "pct exec 112 -- apk update",
-      "pct exec 112 -- apk add curl openrc libc6-compat",
+      # 5. Install Cloudflare Tunnel (Distributed Replica)
       "pct exec 112 -- curl -L --output /usr/local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64",
       "pct exec 112 -- chmod +x /usr/local/bin/cloudflared",
       "pct exec 112 -- cloudflared service install ${var.cf_tunnel_token}",
