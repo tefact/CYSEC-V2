@@ -51,54 +51,54 @@ Pipeline ini memiliki **3 layer self-healing** yang otomatis memperbaiki masalah
 
 ```
 ┌──────────────────── TAHAP 1: Terraform Provisioning ────────────────────┐
-│                                                                          │
+│                                                                         │
 │  CT boot → flush network → static IP + DNS → diagnostic snapshot        │
-│       │                                                                  │
-│       ▼                                                                  │
-│  ┌─ Self-Healing: apk update (150s) ──────────────────────┐             │
-│  │  attempts 1-7:   retry apk update (TCP connectivity)    │             │
-│  │  attempt 8  (25%): 🔧 re-apply DNS + restart networking │             │
-│  │  attempts 9-14:  retry                                  │             │
-│  │  attempt 15 (50%): 🔧 re-apply DNS + restart networking │             │
-│  │  attempts 16-22: retry                                  │             │
-│  │  attempt 23 (75%): 🔧 re-apply DNS + restart networking │             │
-│  │  attempts 24-30: final retry → exit 99 if still failing │             │
-│  └─────────────────────────────────────────────────────────┘             │
-│       │                                                                  │
-│       ▼                                                                  │
+│       │                                                                 │
+│       ▼                                                                 │
+│  ┌─ Self-Healing: apk update (150s) ───────────────────────┐            │
+│  │  attempts 1-7:   retry apk update (TCP connectivity)    │            │
+│  │  attempt 8  (25%): 🔧 re-apply DNS + restart networking │            │
+│  │  attempts 9-14:  retry                                  │            │
+│  │  attempt 15 (50%): 🔧 re-apply DNS + restart networking │            │
+│  │  attempts 16-22: retry                                  │            │
+│  │  attempt 23 (75%): 🔧 re-apply DNS + restart networking │            │
+│  │  attempts 24-30: final retry → exit 99 if still failing │            │
+│  └─────────────────────────────────────────────────────────┘            │
+│       │                                                                 │
+│       ▼                                                                 │
 │  OpenRC init → apk add openssh/curl/rsync/nginx → SSH config            │
 │  → mkdir /var/www/html (chmod 777) → cloudflared tunnel service         │
-│                                                                          │
-└──────────────────────────────────────────────────────────────────────────┘
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
                                   │
                                   ▼
 ┌──────────────────── TAHAP 2: Deploy (GitHub Actions) ───────────────────┐
-│                                                                          │
+│                                                                         │
 │  SSH key setup + known_hosts (CT + Proxmox hosts)                       │
-│       │                                                                  │
-│       ▼                                                                  │
+│       │                                                                 │
+│       ▼                                                                 │
 │  ┌─ Self-Healing: SSH Readiness (150s) ───────────────────┐             │
-│  │  attempt N: ssh "echo ok" → success? done               │             │
-│  │  at 25%/50%/75%:                                        │             │
-│  │    🔧 lxc-attach restart sshd (via Proxmox host)        │             │
-│  │    🔧 re-apply DNS (/etc/resolv.conf)                   │             │
-│  │    🔧 verify network interface (ip addr show)            │             │
-│  └─────────────────────────────────────────────────────────┘             │
-│       │                                                                  │
-│       ▼                                                                  │
+│  │  attempt N: ssh "echo ok" → success? done              │             │
+│  │  at 25%/50%/75%:                                       │             │
+│  │    🔧 lxc-attach restart sshd (via Proxmox host)       │             │
+│  │    🔧 re-apply DNS (/etc/resolv.conf)                  │             │
+│  │    🔧 verify network interface (ip addr show)          │             │
+│  └────────────────────────────────────────────────────────┘             │
+│       │                                                                 │
+│       ▼                                                                 │
 │  ┌─ Self-Healing: Rsync Parallel (150s) ──────────────────┐             │
-│  │  attempt N: rsync → exit 0? done                        │             │
-│  │  flags: --no-perms --no-owner --no-group (Alpine-safe)  │             │
-│  │  at 25%/50%/75%:                                        │             │
-│  │    🔧 chmod 777 /var/www/html (via lxc-attach)          │             │
-│  │    🔧 restart sshd                                      │             │
-│  │    🔧 re-apply DNS                                      │             │
+│  │  attempt N: rsync → exit 0? done                        │            │
+│  │  flags: --no-perms --no-owner --no-group (Alpine-safe)  │            │
+│  │  at 25%/50%/75%:                                        │            │
+│  │    🔧 chmod 777 /var/www/html (via lxc-attach)          │            │
+│  │    🔧 restart sshd                                      │            │
+│  │    🔧 re-apply DNS                                      │            │
 │  └─────────────────────────────────────────────────────────┘             │
 │       │                                                                  │
 │       ▼                                                                  │
 │  Fix permissions (chmod 755/644) → cleanup SSH key                      │
-│                                                                          │
-└──────────────────────────────────────────────────────────────────────────┘
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Mengapa Self-Healing?
@@ -152,11 +152,11 @@ Minimal yang harus sudah ada sebelum memulai:
 
 | Parameter | Value |
 |-----------|-------|
-| CT ID | 100 |
+| CT ID | 110 |
 | Hostname | `github-runner` |
 | Template | **Debian 13** atau **Ubuntu 24.04** |
 | CPU | 1 cores |
-| RAM | 256 MB |
+| RAM | 128 MB |
 | Disk | 3 GB |
 | Network | Bridge `vmbr0`, IP: `10.10.10.110/24`, GW: `10.10.10.1` |
 
@@ -607,21 +607,21 @@ Push ke main
     │
     ▼
 ┌─────────────────────────────────────┐
-│  🏗️ Job 1: provision               │
+│  🏗️ Job 1: provision                │
 │  Terraform Init + Apply             │  ← Buat/pastikan CT ada (idempoten)
 │  working-dir: terraform/            │     + self-healing network + SSH + cloudflared
 └──────────────┬──────────────────────┘
                │ (lanjut jika sukses)
                ▼
-┌─────────────────────────────────────┐
-│  🚀 Job 2: deploy                   │
-│  Step 1: Checkout + SSH key setup   │
-│  Step 2: known_hosts (CT + PVE)     │
-│  Step 3: SSH readiness (self-heal)  │  ← Retry + lxc-attach repair sshd
-│  Step 4: Rsync parallel (self-heal) │  ← Retry + fix perms via Proxmox
+┌──────────────────────────────────────────┐
+│  🚀 Job 2: deploy                        │
+│  Step 1: Checkout + SSH key setup        │
+│  Step 2: known_hosts (CT + PVE)          │
+│  Step 3: SSH readiness (self-heal)       │  ← Retry + lxc-attach repair sshd
+│  Step 4: Rsync parallel (self-heal)      │  ← Retry + fix perms via Proxmox
 │  Step 5: Fix permissions + reload nginx  │
-│  Step 6: Cleanup SSH key            │
-└─────────────────────────────────────┘
+│  Step 6: Cleanup SSH key                 │
+└──────────────────────────────────────────┘
 ```
 
 ### 5.3 — Monitor di GitHub:
