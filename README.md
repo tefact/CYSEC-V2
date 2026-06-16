@@ -27,7 +27,7 @@ Repo ini adalah pipeline CI/CD lengkap yang menggabungkan **Terraform** (Infrast
          │              ┌──────────────┐               │
          └──────────────│ Self-Hosted  │───────────────┘
                         │   Runner     │
-                        │ 10.10.10.100 │
+                        │ 10.10.10.110 │
                         └──────┬───────┘
                                │
                         ┌──────┴───────┐
@@ -158,7 +158,7 @@ Minimal yang harus sudah ada sebelum memulai:
 | CPU | 1-2 cores |
 | RAM | 1024 MB (cukup!) |
 | Disk | 10 GB |
-| Network | Bridge `vmbr0`, IP: `10.10.10.100/24`, GW: `10.10.10.1` |
+| Network | Bridge `vmbr0`, IP: `10.10.10.110/24`, GW: `10.10.10.1` |
 
 > ⚠️ **JANGAN pakai Alpine Linux untuk runner!** GitHub Actions Runner butuh **glibc**. Alpine pakai **musl libc** yang tidak kompatibel — binary runner akan crash saat startup.
 
@@ -180,7 +180,7 @@ Menginstall aplikasi pihak ketiga langsung di host Proxmox itu **TABU**:
 Setelah CT `github-runner` dibuat dan jalan, SSH ke dalamnya:
 
 ```bash
-ssh root@10.10.10.100
+ssh root@10.10.10.110
 ```
 
 Install semua dependensi:
@@ -662,7 +662,7 @@ apk update
 **Solusi:**
 ```bash
 # SSH ke CT runner
-ssh root@10.10.10.100
+ssh root@10.10.10.110
 
 # Cek status
 sudo systemctl status actions.runner.*

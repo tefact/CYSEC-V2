@@ -34,6 +34,9 @@ concurrency:
   cancel-in-progress: true
 
 # ── Runner: self-hosted (ada di dalam Proxmox network) ─────────────────────
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   # =========================================================================
   # 🏗️ TAHAP 1: Provisioning — Terraform bikin LXC container otomatis
