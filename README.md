@@ -45,11 +45,22 @@ Repo ini adalah pipeline CI/CD lengkap yang menggabungkan **Terraform** (Infrast
 
 ---
 
-## 🔄 Pipeline Flow (End-to-End Self-Healing)
+## 🔄 Pipeline Flow (CI/CD + End-to-End Self-Healing)
 
-Pipeline ini memiliki **3 layer self-healing** yang otomatis memperbaiki masalah jaringan dan permission tanpa intervensi manual:
+Pipeline ini memiliki **3 tahap** (CI → CD Provision → CD Deploy) dengan **3 layer self-healing** yang otomatis memperbaiki masalah jaringan dan permission tanpa intervensi manual:
 
 ```
+┌──────────────────── TAHAP 0: CI Gatekeeper ────────────────────────────────┐
+│                                                                            │
+│  📥 Checkout → 🔬 HTML validation → 🛡️ Secret scan                        │
+│             → 📦 Asset check     → 🏗️ Terraform fmt                       │
+│                                                                            │
+│  Kalau GAGAL → pipeline STOP. Terraform & rsync TIDAK jalan.               │
+│  Server produksi tetap aman menampilkan versi terakhir yang normal.         │
+│                                                                            │
+└────────────────────────────────────────────────────────────────────────────┘
+                                  │
+                                  ▼
 ┌──────────────────── TAHAP 1: Terraform Provisioning ────────────────────┐
 │                                                                         │
 │  CT boot → flush network → static IP + DNS → diagnostic snapshot        │
@@ -672,9 +683,18 @@ CYSEC-V2/
 ├── Trigger: push ke branch main
 ├── Concurrency: cancel deploy lama kalau ada push baru
 │
-├── 🏗️ Job 1: provision (Terraform)
+├── 🔍 Job 0: code-validation (CI Gatekeeper)
 │   ├── 📥 Checkout repository
 │   ├── 🏗️ Setup Terraform (hashicorp/setup-terraform@v3)
+│   ├── 🔬 HTML validation (DOCTYPE, <html>, <head>, <body>)
+│   ├── 🛡️ Secret leak scan (GitHub tokens, AWS keys, private keys)
+│   ├── 📦 Asset completeness (CSS/JS references exist)
+│   └── 🏗️ Terraform format check (terraform fmt -check)
+│
+├── 🏗️ Job 1: provision (needs: code-validation)
+│   ├── 📥 Checkout repository
+│   ├── 🏗️ Setup Terraform (hashicorp/setup-terraform@v3)
+│   ├── 🔐 Add Proxmox hosts to known_hosts (ssh-keyscan)
 │   ├── 📦 Terraform Init (working-dir: terraform/)
 │   └── 🚀 Terraform Apply -auto-approve
 │       └── Env: TF_VAR_proxmox_api_token, TF_VAR_ssh_public_key,
