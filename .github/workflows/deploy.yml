@@ -35,9 +35,6 @@ concurrency:
   cancel-in-progress: true
 
 # ── Runner: self-hosted (ada di dalam Proxmox network) ─────────────────────
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   # =========================================================================
   # 🔍 TAHAP 0: CI — Validasi Kode (Satpam Kualitas!)
@@ -50,10 +47,10 @@ jobs:
 
     steps:
       - name: 📥 Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: 🏗️ Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@v4
 
       # ── Cek 1: HTML syntax (unclosed tags, missing doctype) ──────────
       - name: 🔬 HTML validation
@@ -187,11 +184,11 @@ jobs:
     steps:
       # ── Step 1: Checkout kode dari repo ─────────────────────────────────
       - name: 📥 Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # ── Step 2: Setup Terraform CLI ─────────────────────────────────────
       - name: 🏗️ Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@v4
 
       # ── Step 2.5: Add Proxmox hosts ke known_hosts (WAJIB sebelum Terraform SSH!) ──
       # Tanpa ini, Terraform SSH ke node2 gagal karena host key belum dikenal.
@@ -233,7 +230,7 @@ jobs:
     steps:
       # ── Step 1: Checkout kode dari repo ─────────────────────────────────
       - name: 📥 Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # ── Step 2: Setup SSH key dari GitHub Secrets ───────────────────────
       # Key ditulis ke file sementara, permission 600 supaya SSH accept.

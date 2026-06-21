@@ -262,6 +262,44 @@ ping -c 3 10.10.10.201
 > ping -c 3 10.10.10.112   # web2
 > ```
 
+### 1.5 — Cabut Runner (Jika Perlu Ganti Token / Pindah Repo)
+
+> ⚠️ **Jangan langsung `config.sh remove`!** Kalau runner masih terinstall sebagai systemd service, kamu harus uninstall service DULU. Urutan yang salah bikin runner "nyangkut" (ghost runner) di GitHub.
+
+**Urutan yang benar:**
+
+```bash
+cd /home/runner/actions-runner
+
+# 1. Stop service
+sudo ./svc.sh stop
+
+# 2. Uninstall systemd service
+sudo ./svc.sh uninstall
+
+# 3. Baru cabut runner dari GitHub (butuh remove token baru dari GitHub UI)
+./config.sh remove --token <REMOVE_TOKEN>
+```
+
+**Dapatkan Remove Token dari GitHub:**
+1. Buka repo → **Settings → Actions → Runners**
+2. Klik runner yang mau dicabut
+3. Klik **Remove** → copy token yang muncul
+
+**Output sukses:**
+```
+√ Runner removed successfully
+√ Removed .credentials
+√ Removed .runner
+```
+
+> 💡 **Kapan perlu cabut runner?**
+> - Ganti repository (repo lama dihapus/di-rename)
+> - Runner error parah dan perlu re-register dari nol
+> - Pindah runner ke CT/mesin lain
+>
+> Setelah cabut, jalankan ulang `./config.sh --url ... --token ...` seperti Step 1.3 untuk register baru.
+
 ---
 
 ## 🔑 Step 2: Generate SSH Key Pair (di Mesin Runner)
